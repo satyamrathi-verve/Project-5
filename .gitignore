@@ -1,0 +1,14 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next
+/out
+
+# misc
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# NOTE: .env.local is intentionally NOT ignored in the per-team repos —
+# each team's Supabase URL + anon key are committed so `npm run dev` just works.
