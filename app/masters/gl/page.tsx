@@ -719,9 +719,7 @@ export default function GLMasterPage() {
         <SummaryCard
           label="Total Accounts"
           value={accounts.length}
-          share={1}
           chip="bg-brand/10 text-brand ring-1 ring-brand/20 dark:bg-brand/20 dark:text-brand-light"
-          bar="bg-brand"
           icon="grid"
         />
         {ACCOUNT_TYPES.map((t) => {
@@ -731,9 +729,7 @@ export default function GLMasterPage() {
               key={t.type}
               label={t.plural}
               value={count}
-              share={accounts.length ? count / accounts.length : 0}
               chip={t.badge}
-              bar={t.dot}
               icon={TYPE_ICON[t.type]}
               onClick={() => setCol("type", t.type)}
             />
@@ -1039,23 +1035,17 @@ export default function GLMasterPage() {
 function SummaryCard({
   label,
   value,
-  share,
   chip,
-  bar,
   icon,
   onClick,
 }: {
   label: string;
   value: number;
-  share: number;
   /** Icon-chip classes (soft coloured bg + coloured icon), light + dark. */
   chip: string;
-  /** Solid colour for the share bar (e.g. bg-emerald-500). */
-  bar: string;
   icon: IconName;
   onClick?: () => void;
 }) {
-  const pct = Math.round(share * 100);
   return (
     <button
       onClick={onClick}
@@ -1070,12 +1060,6 @@ function SummaryCard({
         <span className={`grid h-10 w-10 place-items-center rounded-xl ${chip}`}>
           <Icon name={icon} size={20} />
         </span>
-      </div>
-      <div className="mt-3">
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-          <div className={`h-full rounded-full ${bar}`} style={{ width: `${pct}%` }} />
-        </div>
-        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{pct}% of all accounts</p>
       </div>
     </button>
   );
