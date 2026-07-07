@@ -46,7 +46,7 @@ export function formatMoney(amount: number, currency: string = BASE_CURRENCY): s
 const LEDGER_TABLE: string | null = null;
 
 /** Column names expected on the ledger table (adjust when wiring the real one). */
-const LEDGER = { account: "account_id", debit: "debit", credit: "credit", posted: "posted" };
+const LEDGER = { account: "account_id", debit: "debit", credit: "credit", posted: "posted", date: "posted_at" };
 
 export interface BalanceResult {
   /** accountId -> current balance (defaults to 0 for every account, never null). */
@@ -87,4 +87,39 @@ export async function loadBalances(
     if (type) byId[id] = computeBalance(type, t);
   }
   return { byId, currency };
+}
+
+export interface AccountActivity {
+  /** Count of POSTED transaction lines against the account. */
+  posted: number;
+  /** Count of PENDING / unposted transaction lines against the account. */
+  pending: number;
+  /** ISO date of the most recent posting, or null if there is none. */
+  lastActivity: string | null;
+}
+
+/**
+ * Per-account transaction stats for the status-change dialog. Returns all
+ * zeros/null while no ledger table is configured (today) — with no network call —
+ * and real counts once transactions post to the ledger. Never hardcoded.
+ */
+export async function loadAccountActivity(supabase: SupabaseClient, accountId: string): Promise<AccountActivity> {
+  const empty: AccountActivity = { posted: 0, pending: 0, lastActivity: null };
+  if (!LEDGER_TABLE) return empty;
+
+  const res = await supabase.from(LEDGER_TABLE).select("*").eq(LEDGER.account, accountId);
+  if (res.error || !res.data) return empty;
+
+  const rows = res.data as unknown as Record<string, unknown>[];
+  let posted = 0;
+  let pending = 0;
+  let last = -Infinity;
+  for (const row of rows) {
+    if (row[LEDGER.posted]) posted += 1;
+    else pending += 1;
+    const raw = row[LEDGER.date];
+    const t = raw ? Date.parse(String(raw)) : NaN;
+    if (!Number.isNaN(t) && t > last) last = t;
+  }
+  return { posted, pending, lastActivity: last === -Infinity ? null : new Date(last).toISOString() };
 }

@@ -46,7 +46,7 @@ import {
   type ValidationResult,
 } from "@/lib/gl";
 import { GL_DESCRIPTIONS } from "@/lib/gl-coa.mjs";
-import { BASE_CURRENCY, formatMoney, loadBalances } from "@/lib/balances";
+import { BASE_CURRENCY, formatMoney, loadBalances, loadAccountActivity, type AccountActivity } from "@/lib/balances";
 import { Icon, type IconName } from "@/components/icons";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
@@ -166,7 +166,7 @@ function Btn({
 }: {
   children?: React.ReactNode;
   onClick?: () => void;
-  variant?: "primary" | "ghost" | "danger";
+  variant?: "primary" | "ghost" | "danger" | "warn";
   type?: "button" | "submit";
   disabled?: boolean;
   title?: string;
@@ -177,9 +177,11 @@ function Btn({
   const styles =
     variant === "primary"
       ? "bg-brand text-white hover:bg-brand-dark shadow-sm"
-      : variant === "danger"
-        ? "border border-red-200 bg-white text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
-        : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700";
+      : variant === "warn"
+        ? "bg-amber-500 text-white hover:bg-amber-600 shadow-sm"
+        : variant === "danger"
+          ? "border border-red-200 bg-white text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:bg-transparent dark:text-red-400 dark:hover:bg-red-500/10"
+          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700";
   return (
     <button type={type} onClick={onClick} disabled={disabled} title={title} className={`${base} ${styles}`}>
       {icon && <Icon name={icon} size={16} />}
@@ -342,6 +344,7 @@ export default function GLMasterPage() {
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+  const [statusChange, setStatusChange] = useState<{ account: GLAccount; toInactive: boolean } | null>(null);
   const [toast, setToast] = useState<{ msg: string; tone: "ok" | "err" } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
@@ -441,13 +444,21 @@ export default function GLMasterPage() {
     },
     [favorites, persistFavorites],
   );
-  const toggleStatus = useCallback(
-    (id: string) => {
+  // Explicit status set (used after the confirmation dialog is accepted).
+  const setStatus = useCallback(
+    (id: string, makeInactive: boolean) => {
       const next = new Set(inactive);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (makeInactive) next.add(id);
+      else next.delete(id);
       persistInactive(next);
     },
     [inactive, persistInactive],
+  );
+  // Clicking a status badge no longer changes state immediately — it opens the
+  // enterprise-style confirmation dialog (deactivate = rich, activate = simple).
+  const requestStatusChange = useCallback(
+    (a: GLAccount) => setStatusChange({ account: a, toInactive: !inactive.has(a.id) }),
+    [inactive],
   );
 
   const pushRecent = useCallback((id: string) => {
@@ -887,7 +898,7 @@ export default function GLMasterPage() {
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           inactive={inactive}
-          onToggleStatus={toggleStatus}
+          onRequestStatus={requestStatusChange}
           selection={selection}
           onToggleRow={toggleRow}
           onToggleAll={toggleAllOnPage}
@@ -907,7 +918,7 @@ export default function GLMasterPage() {
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           inactive={inactive}
-          onToggleStatus={toggleStatus}
+          onRequestStatus={requestStatusChange}
           onView={openView}
           onEdit={openEdit}
           onQuickAdd={openQuickAdd}
@@ -948,7 +959,7 @@ export default function GLMasterPage() {
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           inactive={inactive}
-          onToggleStatus={toggleStatus}
+          onRequestStatus={requestStatusChange}
           onClose={() => setDrawer(null)}
           onSwitchEdit={(a) => setDrawer({ mode: "edit", account: a })}
           onCopy={openCopy}
@@ -985,6 +996,24 @@ export default function GLMasterPage() {
           confirmLabel={confirm.confirmLabel}
           onCancel={() => setConfirm(null)}
           onConfirm={confirm.onConfirm}
+        />
+      )}
+
+      {/* status-change dialog (activate / inactivate) */}
+      {statusChange && (
+        <StatusDialog
+          account={statusChange.account}
+          toInactive={statusChange.toInactive}
+          balance={balances[statusChange.account.id] ?? 0}
+          currency={currency}
+          onCancel={() => setStatusChange(null)}
+          onConfirm={() => {
+            setStatus(statusChange.account.id, statusChange.toInactive);
+            flash(
+              `${statusChange.account.code} · ${statusChange.account.name} set ${statusChange.toInactive ? "inactive" : "active"}.`,
+            );
+            setStatusChange(null);
+          }}
         />
       )}
 
@@ -1259,7 +1288,7 @@ function FlatTable({
   favorites,
   onToggleFavorite,
   inactive,
-  onToggleStatus,
+  onRequestStatus,
   selection,
   onToggleRow,
   onToggleAll,
@@ -1285,7 +1314,7 @@ function FlatTable({
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   inactive: Set<string>;
-  onToggleStatus: (id: string) => void;
+  onRequestStatus: (a: GLAccount) => void;
   selection: Set<string>;
   onToggleRow: (id: string) => void;
   onToggleAll: (ids: string[], allSelected: boolean) => void;
@@ -1473,7 +1502,7 @@ function FlatTable({
                     )}
                     {cols.status && (
                       <td className={`bg-inherit px-4 ${py}`} onClick={stop}>
-                        <StatusBadge active={!inactive.has(a.id)} onToggle={() => onToggleStatus(a.id)} />
+                        <StatusBadge active={!inactive.has(a.id)} onToggle={() => onRequestStatus(a)} />
                       </td>
                     )}
                     <td className={`bg-inherit px-4 text-right ${py}`} onClick={stop}>
@@ -1506,7 +1535,7 @@ function GroupedView({
   favorites,
   onToggleFavorite,
   inactive,
-  onToggleStatus,
+  onRequestStatus,
   onView,
   onEdit,
   onQuickAdd,
@@ -1518,7 +1547,7 @@ function GroupedView({
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   inactive: Set<string>;
-  onToggleStatus: (id: string) => void;
+  onRequestStatus: (a: GLAccount) => void;
   onView: (a: GLAccount) => void;
   onEdit: (a: GLAccount) => void;
   onQuickAdd: (type: AccountType, group: string | null) => void;
@@ -1625,7 +1654,7 @@ function GroupedView({
                                 {formatMoney(balances[a.id] ?? 0, currency)}
                               </td>
                               <td className={`w-28 px-4 ${py}`} onClick={stop}>
-                                <StatusBadge active={!inactive.has(a.id)} onToggle={() => onToggleStatus(a.id)} />
+                                <StatusBadge active={!inactive.has(a.id)} onToggle={() => onRequestStatus(a)} />
                               </td>
                               <td className={`w-20 px-4 text-right ${py}`} onClick={stop}>
                                 <div className="flex items-center justify-end gap-0.5">
@@ -1686,7 +1715,7 @@ function AccountDrawer({
   favorites,
   onToggleFavorite,
   inactive,
-  onToggleStatus,
+  onRequestStatus,
   onClose,
   onSwitchEdit,
   onCopy,
@@ -1702,7 +1731,7 @@ function AccountDrawer({
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   inactive: Set<string>;
-  onToggleStatus: (id: string) => void;
+  onRequestStatus: (a: GLAccount) => void;
   onClose: () => void;
   onSwitchEdit: (a: GLAccount) => void;
   onCopy: (a: GLAccount) => void;
@@ -1861,7 +1890,7 @@ function AccountDrawer({
                     <ViewRow label="Parent / group" value={account.parent_group ?? "—"} />
                     <ViewRow label="Normal balance" value={<span className="capitalize">{typeMeta(account.type).normalBalance}</span>} />
                     <ViewRow label="Current balance" value={<span className="font-mono tabular-nums">{formatMoney(balance, currency)}</span>} />
-                    <ViewRow label="Status" value={<StatusBadge active={!inactive.has(account.id)} onToggle={() => onToggleStatus(account.id)} />} />
+                    <ViewRow label="Status" value={<StatusBadge active={!inactive.has(account.id)} onToggle={() => onRequestStatus(account)} />} />
                     <ViewRow
                       label="Favourite"
                       value={
@@ -2077,6 +2106,148 @@ function ConfirmDialog({
         <div className="mt-5 flex justify-end gap-2">
           <Btn onClick={onCancel}>Cancel</Btn>
           <Btn variant="danger" icon="trash" onClick={onConfirm}>{confirmLabel}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Status-change dialog (enterprise activate / inactivate confirmation)
+// ===========================================================================
+
+function formatActivityDate(iso: string | null): string {
+  if (!iso) return "No recent activity";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function StatusDialog({
+  account,
+  toInactive,
+  balance,
+  currency,
+  onCancel,
+  onConfirm,
+}: {
+  account: GLAccount;
+  toInactive: boolean;
+  balance: number;
+  currency: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [activity, setActivity] = useState<AccountActivity | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!supabase) {
+      setActivity({ posted: 0, pending: 0, lastActivity: null });
+      return;
+    }
+    void loadAccountActivity(supabase, account.id).then((a) => {
+      if (!cancelled) setActivity(a);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [account.id]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  const nonZeroBalance = Math.abs(balance) > 0.005;
+  const hasPending = (activity?.pending ?? 0) > 0;
+  const warnBanner =
+    "mt-3 flex gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200";
+
+  return (
+    <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onCancel} />
+      <div className="relative z-10 flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-drawer animate-scale-in dark:bg-slate-900">
+        <div className="flex-1 overflow-y-auto p-6">
+          {toInactive ? (
+            <>
+              <div className="mb-3 grid h-11 w-11 place-items-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
+                <span className="text-xl leading-none">⚠</span>
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Set account to inactive?</h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                You are about to inactivate the following account:
+              </p>
+
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                <ViewRow label="Account code" value={<span className="font-mono">{account.code}</span>} />
+                <ViewRow label="Account name" value={account.name} />
+                <ViewRow label="Current balance" value={<span className="font-mono tabular-nums">{formatMoney(balance, currency)}</span>} />
+                <ViewRow label="Posted transactions" value={activity ? String(activity.posted) : "…"} />
+                <ViewRow label="Recent activity" value={activity ? formatActivityDate(activity.lastActivity) : "…"} className="col-span-2" />
+              </dl>
+
+              {nonZeroBalance && (
+                <div className={warnBanner}>
+                  <span className="leading-none">⚠</span>
+                  <p>
+                    This account currently has a balance of <b>{formatMoney(balance, currency)}</b>. Inactivating it may prevent
+                    future postings while the balance remains. Please verify this is intentional.
+                  </p>
+                </div>
+              )}
+              {hasPending && (
+                <div className={warnBanner}>
+                  <span className="leading-none">⚠</span>
+                  <p>
+                    There are pending transactions using this account. Consider completing or changing those transactions before
+                    inactivating the account.
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
+                <p className="mb-1.5 font-semibold text-slate-700 dark:text-slate-200">Once inactive</p>
+                <ul className="list-disc space-y-1 pl-4">
+                  <li>This account cannot be selected in new Journal Entries.</li>
+                  <li>It cannot be used on Sales Invoices.</li>
+                  <li>It cannot be used on Vendor Bills.</li>
+                  <li>It cannot be used on Payments.</li>
+                  <li>Existing historical transactions will remain unchanged.</li>
+                  <li>Reports will continue to include historical activity.</li>
+                </ul>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mb-3 grid h-11 w-11 place-items-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400">
+                <Icon name="check" size={20} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Activate account?</h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                This account will again be available for new accounting transactions.
+              </p>
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/50">
+                <ViewRow label="Account code" value={<span className="font-mono">{account.code}</span>} />
+                <ViewRow label="Account name" value={account.name} />
+              </dl>
+            </>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-6 py-4 dark:border-slate-800">
+          <Btn onClick={onCancel}>Cancel</Btn>
+          {toInactive ? (
+            <Btn variant="warn" onClick={onConfirm}>
+              Set Inactive
+            </Btn>
+          ) : (
+            <Btn variant="primary" icon="check" onClick={onConfirm}>
+              Activate
+            </Btn>
+          )}
         </div>
       </div>
     </div>
