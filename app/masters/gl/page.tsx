@@ -871,7 +871,7 @@ export default function GLMasterPage() {
                   [
                     ["type", "Type"],
                     ["group", "Group"],
-                    ["balance", "Normal balance"],
+                    ["balance", "Debit / Credit"],
                     ["amount", "Balance"],
                     ["status", "Status"],
                   ] as const
@@ -1414,7 +1414,7 @@ function FlatTable({
               <SortHeader label="Account name" active={sortKey === "name"} dir={sortDir} onClick={() => onSort("name")} className="bg-inherit" />
               {cols.type && <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onSort("type")} className="w-28 bg-inherit" />}
               {cols.group && <SortHeader label="Group" active={sortKey === "parent_group"} dir={sortDir} onClick={() => onSort("parent_group")} className="w-44 bg-inherit" />}
-              {cols.balance && <th className="w-28 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Normal Bal.</th>}
+              {cols.balance && <th className="w-32 whitespace-nowrap bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Debit / Credit</th>}
               {cols.amount && <th className="w-32 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
               {cols.status && <th className="w-24 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Status</th>}
               <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
