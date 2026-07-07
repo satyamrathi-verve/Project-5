@@ -56,6 +56,7 @@ import { AttachmentManager } from "@/components/AttachmentManager";
 const PAGE_SIZES = [10, 25, 50, 100];
 const FAV_KEY = "gl.favorites";
 const RECENT_KEY = "gl.recent";
+const RECENT_LIMIT = 10; // keep only the latest N recently-viewed accounts
 const STATUS_KEY = "gl.inactive"; // per-browser: ids marked inactive (no DB column)
 const NOTES_KEY = "gl.notes"; // per-browser: id -> note text (no DB column)
 
@@ -462,16 +463,33 @@ export default function GLMasterPage() {
     [inactive],
   );
 
+  const writeRecent = (next: string[]) => {
+    try {
+      if (next.length) localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      else localStorage.removeItem(RECENT_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+  // Move id to the front, de-dupe, and keep only the latest RECENT_LIMIT.
   const pushRecent = useCallback((id: string) => {
     setRecent((prev) => {
-      const next = [id, ...prev.filter((x) => x !== id)].slice(0, 8);
-      try {
-        localStorage.setItem(RECENT_KEY, JSON.stringify(next));
-      } catch {
-        /* ignore */
-      }
+      const next = [id, ...prev.filter((x) => x !== id)].slice(0, RECENT_LIMIT);
+      writeRecent(next);
       return next;
     });
+  }, []);
+  // Remove one account from the recent list (does NOT touch the account/data).
+  const removeRecent = useCallback((id: string) => {
+    setRecent((prev) => {
+      const next = prev.filter((x) => x !== id);
+      writeRecent(next);
+      return next;
+    });
+  }, []);
+  const clearRecent = useCallback(() => {
+    setRecent([]);
+    writeRecent([]);
   }, []);
 
   // ---- derived -------------------------------------------------------------
@@ -758,14 +776,44 @@ export default function GLMasterPage() {
         <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
           <span className="font-medium text-slate-500 dark:text-slate-400">Recent:</span>
           {recentAccounts.map((a) => (
-            <button
+            <span
               key={a.id}
-              onClick={() => openView(a)}
-              className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-600 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-brand-light"
+              className="group inline-flex items-center overflow-hidden rounded-full border border-slate-200 bg-white text-xs text-slate-600 transition hover:border-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-brand-light"
             >
-              {a.code} · {a.name}
-            </button>
+              <button
+                onClick={() => openView(a)}
+                title={`${a.code} · ${a.name}`}
+                className="py-1 pl-2.5 pr-1 transition hover:text-brand dark:hover:text-brand-light"
+              >
+                {a.code} · {a.name}
+              </button>
+              <button
+                onClick={() => removeRecent(a.id)}
+                aria-label={`Remove ${a.code} · ${a.name} from recent`}
+                title="Remove from recent"
+                className="mr-0.5 rounded-full p-0.5 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-red-600 group-hover:opacity-100 dark:hover:bg-slate-700 [@media(hover:none)]:opacity-100"
+              >
+                <Icon name="close" size={12} />
+              </button>
+            </span>
           ))}
+          <button
+            onClick={() =>
+              setConfirm({
+                title: "Clear Recent Accounts?",
+                message:
+                  "This will remove all recently viewed accounts from your personal history. No accounting data will be deleted.",
+                confirmLabel: "Clear",
+                onConfirm: () => {
+                  clearRecent();
+                  setConfirm(null);
+                },
+              })
+            }
+            className="ml-auto rounded-lg px-2 py-1 text-xs font-medium text-slate-500 transition hover:text-red-600 hover:underline dark:text-slate-400"
+          >
+            Clear All
+          </button>
         </div>
       )}
 
