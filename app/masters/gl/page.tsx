@@ -51,6 +51,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
+import { AttachmentManager } from "@/components/AttachmentManager";
 
 const PAGE_SIZES = [10, 25, 50, 100];
 const FAV_KEY = "gl.favorites";
@@ -1934,9 +1935,7 @@ function AccountDrawer({
               {tab === "history" && (
                 <GatedTab icon="clock" title="No change history" body="Field-level change history needs a history/versioning table, which the fixed schema doesn't include yet." />
               )}
-              {tab === "attachments" && (
-                <GatedTab icon="file" title="No attachments" body="Attachment storage isn't configured for this schema. This tab will list files once a documents/storage bucket is wired up." />
-              )}
+              {tab === "attachments" && <AttachmentManager entityType="gl_account" entityId={account.id} />}
               {tab === "audit" && (
                 <GatedTab icon="scroll" title="No audit trail" body="Who-changed-what auditing needs an audit_log table and user identities, which aren't part of the current backend." />
               )}

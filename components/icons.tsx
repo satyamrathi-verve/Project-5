@@ -37,7 +37,9 @@ export type IconName =
   | "check"
   | "filter"
   | "download"
-  | "star";
+  | "star"
+  | "folder"
+  | "link";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   grid: (
@@ -131,6 +133,8 @@ const PATHS: Record<IconName, React.ReactNode> = {
   filter: <path d="M3 5h18l-7 8v6l-4-2v-4z" />,
   download: <path d="M12 3v12m0 0-4-4m4 4 4-4M5 21h14" />,
   star: <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />,
+  folder: <path d="M3 7a2 2 0 0 1 2-2h3.4l1.6 1.8H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
+  link: <path d="M9.5 14.5l5-5M10.5 6.8l1-1a3.5 3.5 0 0 1 5 5l-1 1M13.5 17.2l-1 1a3.5 3.5 0 0 1-5-5l1-1" />,
 };
 
 export function Icon({
