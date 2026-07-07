@@ -141,6 +141,20 @@ export function knownGroups(accounts: GLAccount[]): string[] {
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Current balance of an account from its posted debit/credit totals, using the
+ * standard accounting sign convention:
+ *   debit-normal  (Assets, Expenses)             -> debit − credit
+ *   credit-normal (Liabilities, Equity, Revenue) -> credit − debit
+ * Equity is stored under `liability` (credit-normal), so it is handled correctly.
+ * Pure + framework-free so it can be reused by reports and the future ledger.
+ */
+export function computeBalance(type: AccountType, totals: { debit: number; credit: number }): number {
+  const debit = totals.debit || 0;
+  const credit = totals.credit || 0;
+  return typeMeta(type).normalBalance === "debit" ? debit - credit : credit - debit;
+}
+
 // ---------------------------------------------------------------------------
 // Numbering
 // ---------------------------------------------------------------------------

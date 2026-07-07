@@ -46,6 +46,7 @@ import {
   type ValidationResult,
 } from "@/lib/gl";
 import { GL_DESCRIPTIONS } from "@/lib/gl-coa.mjs";
+import { BASE_CURRENCY, formatMoney, loadBalances } from "@/lib/balances";
 import { Icon, type IconName } from "@/components/icons";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
@@ -326,7 +327,7 @@ export default function GLMasterPage() {
   const [pageSize, setPageSize] = useState(25);
   const [view, setView] = useState<ViewMode>("flat");
   const [density, setDensity] = useState<Density>("comfortable");
-  const [cols, setCols] = useState({ type: true, group: true, balance: true, status: true });
+  const [cols, setCols] = useState({ type: true, group: true, balance: true, amount: true, status: true });
   const [colMenuOpen, setColMenuOpen] = useState(false);
 
   // per-browser UI state
@@ -334,6 +335,8 @@ export default function GLMasterPage() {
   const [recent, setRecent] = useState<string[]>([]);
   const [inactive, setInactive] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [balances, setBalances] = useState<Record<string, number>>({});
+  const [currency, setCurrency] = useState<string>(BASE_CURRENCY);
 
   // overlays
   const [drawer, setDrawer] = useState<DrawerState | null>(null);
@@ -367,6 +370,27 @@ export default function GLMasterPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Balances are DERIVED from posted transactions (never stored on the account),
+  // recomputed whenever accounts change — including after any CRUD reload. No
+  // ledger table exists yet, so every account resolves to 0.00. Once transaction
+  // modules post ledger lines, this same fetch surfaces real balances with no UI
+  // change. (A realtime subscription can later call the identical loader.)
+  useEffect(() => {
+    if (!supabase || accounts.length === 0) {
+      setBalances({});
+      return;
+    }
+    let cancelled = false;
+    void loadBalances(supabase, accounts).then((res) => {
+      if (cancelled) return;
+      setBalances(res.byId);
+      setCurrency(res.currency);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [accounts]);
 
   useEffect(() => {
     try {
@@ -776,6 +800,7 @@ export default function GLMasterPage() {
                     ["type", "Type"],
                     ["group", "Group"],
                     ["balance", "Normal balance"],
+                    ["amount", "Balance"],
                     ["status", "Status"],
                   ] as const
                 ).map(([c, label]) => (
@@ -850,6 +875,8 @@ export default function GLMasterPage() {
           rows={pageRows}
           cols={cols}
           density={density}
+          balances={balances}
+          currency={currency}
           colFilters={colFilters}
           onColFilter={setCol}
           groups={groups}
@@ -875,6 +902,8 @@ export default function GLMasterPage() {
         <GroupedView
           tree={tree}
           density={density}
+          balances={balances}
+          currency={currency}
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           inactive={inactive}
@@ -914,6 +943,8 @@ export default function GLMasterPage() {
         <AccountDrawer
           state={drawer}
           accounts={accounts}
+          balance={drawer.account ? balances[drawer.account.id] ?? 0 : 0}
+          currency={currency}
           favorites={favorites}
           onToggleFavorite={toggleFavorite}
           inactive={inactive}
@@ -1216,6 +1247,8 @@ function FlatTable({
   rows,
   cols,
   density,
+  balances,
+  currency,
   colFilters,
   onColFilter,
   groups,
@@ -1238,8 +1271,10 @@ function FlatTable({
   empty,
 }: {
   rows: GLAccount[];
-  cols: { type: boolean; group: boolean; balance: boolean; status: boolean };
+  cols: { type: boolean; group: boolean; balance: boolean; amount: boolean; status: boolean };
   density: Density;
+  balances: Record<string, number>;
+  currency: string;
   colFilters: ColFilters;
   onColFilter: <K extends keyof ColFilters>(key: K, val: ColFilters[K]) => void;
   groups: string[];
@@ -1263,7 +1298,8 @@ function FlatTable({
 }) {
   const stop = (e: React.MouseEvent) => e.stopPropagation();
   const py = density === "compact" ? "py-1.5" : "py-3";
-  const colCount = 4 + (cols.type ? 1 : 0) + (cols.group ? 1 : 0) + (cols.balance ? 1 : 0) + (cols.status ? 1 : 0);
+  const colCount =
+    4 + (cols.type ? 1 : 0) + (cols.group ? 1 : 0) + (cols.balance ? 1 : 0) + (cols.amount ? 1 : 0) + (cols.status ? 1 : 0);
   const pageIds = rows.map((r) => r.id);
   const allSelected = rows.length > 0 && pageIds.every((id) => selection.has(id));
 
@@ -1287,7 +1323,8 @@ function FlatTable({
               <SortHeader label="Account name" active={sortKey === "name"} dir={sortDir} onClick={() => onSort("name")} className="bg-inherit" />
               {cols.type && <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onSort("type")} className="w-28 bg-inherit" />}
               {cols.group && <SortHeader label="Group" active={sortKey === "parent_group"} dir={sortDir} onClick={() => onSort("parent_group")} className="w-44 bg-inherit" />}
-              {cols.balance && <th className="w-28 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
+              {cols.balance && <th className="w-28 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Normal Bal.</th>}
+              {cols.amount && <th className="w-32 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
               {cols.status && <th className="w-24 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Status</th>}
               <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
             </tr>
@@ -1353,6 +1390,7 @@ function FlatTable({
                   />
                 </th>
               )}
+              {cols.amount && <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800" />}
               {cols.status && (
                 <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
                   <SelectFilterCell
@@ -1428,6 +1466,11 @@ function FlatTable({
                     )}
                     {cols.group && <td className={`bg-inherit px-4 text-slate-600 dark:text-slate-400 ${py}`}>{a.parent_group ?? "—"}</td>}
                     {cols.balance && <td className={`bg-inherit px-4 capitalize text-slate-600 dark:text-slate-400 ${py}`}>{typeMeta(a.type).normalBalance}</td>}
+                    {cols.amount && (
+                      <td className={`bg-inherit px-4 text-right font-mono tabular-nums text-slate-700 dark:text-slate-200 ${py}`}>
+                        {formatMoney(balances[a.id] ?? 0, currency)}
+                      </td>
+                    )}
                     {cols.status && (
                       <td className={`bg-inherit px-4 ${py}`} onClick={stop}>
                         <StatusBadge active={!inactive.has(a.id)} onToggle={() => onToggleStatus(a.id)} />
@@ -1458,6 +1501,8 @@ function FlatTable({
 function GroupedView({
   tree,
   density,
+  balances,
+  currency,
   favorites,
   onToggleFavorite,
   inactive,
@@ -1468,6 +1513,8 @@ function GroupedView({
 }: {
   tree: ReturnType<typeof buildTree>;
   density: Density;
+  balances: Record<string, number>;
+  currency: string;
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   inactive: Set<string>;
@@ -1574,6 +1621,9 @@ function GroupedView({
                               </td>
                               <td className={`w-24 px-4 font-mono text-slate-700 dark:text-slate-300 ${py}`}>{a.code}</td>
                               <td className={`px-4 font-medium text-slate-800 dark:text-slate-100 ${py}`}>{a.name}</td>
+                              <td className={`w-32 px-4 text-right font-mono tabular-nums text-slate-600 dark:text-slate-300 ${py}`}>
+                                {formatMoney(balances[a.id] ?? 0, currency)}
+                              </td>
                               <td className={`w-28 px-4 ${py}`} onClick={stop}>
                                 <StatusBadge active={!inactive.has(a.id)} onToggle={() => onToggleStatus(a.id)} />
                               </td>
@@ -1631,6 +1681,8 @@ const DRAWER_TABS: { id: DrawerTab; label: string; icon: IconName }[] = [
 function AccountDrawer({
   state,
   accounts,
+  balance,
+  currency,
   favorites,
   onToggleFavorite,
   inactive,
@@ -1645,6 +1697,8 @@ function AccountDrawer({
 }: {
   state: DrawerState;
   accounts: GLAccount[];
+  balance: number;
+  currency: string;
   favorites: Set<string>;
   onToggleFavorite: (id: string) => void;
   inactive: Set<string>;
@@ -1806,6 +1860,7 @@ function AccountDrawer({
                     <ViewRow label="Account name" value={account.name} className="col-span-2" />
                     <ViewRow label="Parent / group" value={account.parent_group ?? "—"} />
                     <ViewRow label="Normal balance" value={<span className="capitalize">{typeMeta(account.type).normalBalance}</span>} />
+                    <ViewRow label="Current balance" value={<span className="font-mono tabular-nums">{formatMoney(balance, currency)}</span>} />
                     <ViewRow label="Status" value={<StatusBadge active={!inactive.has(account.id)} onToggle={() => onToggleStatus(account.id)} />} />
                     <ViewRow
                       label="Favourite"
