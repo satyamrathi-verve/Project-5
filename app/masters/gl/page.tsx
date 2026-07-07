@@ -27,6 +27,7 @@
 */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase, isConfigured } from "@/lib/supabase";
 import type { GLAccount } from "@/lib/types";
 import {
@@ -186,6 +187,69 @@ function Btn({
   );
 }
 
+/*
+  Portal-based popover. Renders into document.body so it escapes any ancestor
+  stacking context (sticky toolbar / backdrop-blur) and overflow clipping — the
+  root cause of the Columns menu hiding behind the sticky table header. Position
+  is derived from the anchor's bounding rect and kept aligned on scroll/resize.
+*/
+function Popover({
+  open,
+  anchorRef,
+  onClose,
+  align = "right",
+  width = 192,
+  children,
+}: {
+  open: boolean;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+  align?: "left" | "right";
+  width?: number;
+  children: React.ReactNode;
+}) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const left = align === "right" ? r.right - width : r.left;
+      setPos({ top: r.bottom + 6, left: Math.min(Math.max(8, left), window.innerWidth - width - 8) });
+    };
+    update();
+    // capture-phase scroll catches scrolling inside the table container too
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, anchorRef, align, width, onClose]);
+
+  if (!open || !pos) return null;
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-[45]" onClick={onClose} aria-hidden="true" />
+      <div
+        role="menu"
+        className="fixed z-[46] rounded-xl border border-slate-200 bg-white p-2 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800"
+        style={{ top: pos.top, left: pos.left, width }}
+      >
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function Chevron({ open, small }: { open: boolean; small?: boolean }) {
   return (
     <span className={`inline-block text-slate-400 transition-transform ${small ? "text-[9px]" : "text-[11px]"} ${open ? "rotate-90" : ""}`}>
@@ -199,6 +263,51 @@ function hierarchyPath(a: GLAccount): string {
   return `${typeMeta(a.type).plural} › ${a.parent_group ?? "Ungrouped"} › ${a.name}`;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-column filtering (Excel/NetSuite-style) — client-side, AND logic
+// ---------------------------------------------------------------------------
+type TextOp = "contains" | "starts" | "ends" | "equals";
+interface TextFilterState {
+  op: TextOp;
+  v: string;
+}
+export interface ColFilters {
+  code: TextFilterState;
+  name: TextFilterState;
+  type: "" | AccountType;
+  group: string;
+  balance: "" | "debit" | "credit";
+  status: "" | "active" | "inactive";
+  favourite: "" | "yes" | "no";
+}
+const EMPTY_COL_FILTERS: ColFilters = {
+  code: { op: "contains", v: "" },
+  name: { op: "contains", v: "" },
+  type: "",
+  group: "",
+  balance: "",
+  status: "",
+  favourite: "",
+};
+const OP_LABEL: Record<TextOp, string> = {
+  contains: "contains",
+  starts: "starts with",
+  ends: "ends with",
+  equals: "equals",
+};
+const COLF_KEY = "gl.colFilters";
+
+/** Case-insensitive text match by operator. Empty needle always matches. */
+function textMatch(op: TextOp, hay: string, needle: string): boolean {
+  if (!needle) return true;
+  const h = hay.toLowerCase();
+  const n = needle.toLowerCase();
+  if (op === "starts") return h.startsWith(n);
+  if (op === "ends") return h.endsWith(n);
+  if (op === "equals") return h === n;
+  return h.includes(n);
+}
+
 // ===========================================================================
 // Main screen
 // ===========================================================================
@@ -210,14 +319,7 @@ export default function GLMasterPage() {
 
   // query state
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<Set<AccountType>>(new Set());
-  const [groupFilter, setGroupFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [balanceFilter, setBalanceFilter] = useState<BalanceFilter>("all");
-  const [favOnly, setFavOnly] = useState(false);
-  const [codeMin, setCodeMin] = useState("");
-  const [codeMax, setCodeMax] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [colFilters, setColFilters] = useState<ColFilters>(EMPTY_COL_FILTERS);
   const [sortKey, setSortKey] = useState<SortKey>("code");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -239,6 +341,8 @@ export default function GLMasterPage() {
   const [confirm, setConfirm] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
   const [toast, setToast] = useState<{ msg: string; tone: "ok" | "err" } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const colBtnRef = useRef<HTMLDivElement>(null);
 
   const flash = useCallback((msg: string, tone: "ok" | "err" = "ok") => {
     setToast({ msg, tone });
@@ -269,13 +373,24 @@ export default function GLMasterPage() {
       const f = JSON.parse(localStorage.getItem(FAV_KEY) ?? "[]");
       const r = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
       const s = JSON.parse(localStorage.getItem(STATUS_KEY) ?? "[]");
+      const cf = JSON.parse(localStorage.getItem(COLF_KEY) ?? "null");
       if (Array.isArray(f)) setFavorites(new Set(f));
       if (Array.isArray(r)) setRecent(r);
       if (Array.isArray(s)) setInactive(new Set(s));
+      if (cf && typeof cf === "object") setColFilters({ ...EMPTY_COL_FILTERS, ...cf });
     } catch {
       /* ignore malformed storage */
     }
   }, []);
+
+  // persist column filters so they survive a page refresh (req 7)
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLF_KEY, JSON.stringify(colFilters));
+    } catch {
+      /* ignore */
+    }
+  }, [colFilters]);
 
   const persistFavorites = useCallback((next: Set<string>) => {
     setFavorites(next);
@@ -328,22 +443,23 @@ export default function GLMasterPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const lo = codeMin ? Number(codeMin) : null;
-    const hi = codeMax ? Number(codeMax) : null;
+    const cf = colFilters;
     let rows = accounts.filter((a) => {
-      if (typeFilter.size > 0 && !typeFilter.has(a.type)) return false;
-      if (groupFilter !== "all" && (a.parent_group ?? "Ungrouped") !== groupFilter) return false;
-      if (statusFilter === "active" && inactive.has(a.id)) return false;
-      if (statusFilter === "inactive" && !inactive.has(a.id)) return false;
-      if (balanceFilter !== "all" && typeMeta(a.type).normalBalance !== balanceFilter) return false;
-      if (favOnly && !favorites.has(a.id)) return false;
-      const n = Number(a.code);
-      if (lo !== null && !Number.isNaN(n) && n < lo) return false;
-      if (hi !== null && !Number.isNaN(n) && n > hi) return false;
+      // global search (all fields)
       if (q) {
         const hay = `${a.code} ${a.name} ${a.parent_group ?? ""} ${typeLabel(a.type)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
+      // per-column filters — all must pass (AND)
+      if (!textMatch(cf.code.op, a.code, cf.code.v)) return false;
+      if (!textMatch(cf.name.op, a.name, cf.name.v)) return false;
+      if (cf.type && a.type !== cf.type) return false;
+      if (cf.group && (a.parent_group ?? "Ungrouped") !== cf.group) return false;
+      if (cf.balance && typeMeta(a.type).normalBalance !== cf.balance) return false;
+      if (cf.status === "active" && inactive.has(a.id)) return false;
+      if (cf.status === "inactive" && !inactive.has(a.id)) return false;
+      if (cf.favourite === "yes" && !favorites.has(a.id)) return false;
+      if (cf.favourite === "no" && favorites.has(a.id)) return false;
       return true;
     });
     rows = [...rows].sort((a, b) => {
@@ -355,7 +471,7 @@ export default function GLMasterPage() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return rows;
-  }, [accounts, search, typeFilter, groupFilter, statusFilter, balanceFilter, favOnly, favorites, inactive, codeMin, codeMax, sortKey, sortDir]);
+  }, [accounts, search, colFilters, favorites, inactive, sortKey, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -368,7 +484,7 @@ export default function GLMasterPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, typeFilter, groupFilter, statusFilter, balanceFilter, favOnly, codeMin, codeMax, pageSize]);
+  }, [search, colFilters, pageSize]);
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -377,20 +493,14 @@ export default function GLMasterPage() {
       setSortDir("asc");
     }
   };
-  const toggleTypeFilter = (t: AccountType) => {
-    const next = new Set(typeFilter);
-    next.has(t) ? next.delete(t) : next.add(t);
-    setTypeFilter(next);
-  };
+  const setCol = useCallback(
+    <K extends keyof ColFilters>(key: K, val: ColFilters[K]) => setColFilters((prev) => ({ ...prev, [key]: val })),
+    [],
+  );
+  const clearCol = (key: keyof ColFilters) => setColFilters((prev) => ({ ...prev, [key]: EMPTY_COL_FILTERS[key] }));
   const resetFilters = () => {
     setSearch("");
-    setTypeFilter(new Set());
-    setGroupFilter("all");
-    setStatusFilter("all");
-    setBalanceFilter("all");
-    setFavOnly(false);
-    setCodeMin("");
-    setCodeMax("");
+    setColFilters(EMPTY_COL_FILTERS);
   };
 
   // ---- selection + bulk ----------------------------------------------------
@@ -496,6 +606,13 @@ export default function GLMasterPage() {
         setColMenuOpen(false);
         return;
       }
+      // Alt+F → focus the first column filter (works even while typing elsewhere)
+      if (e.altKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setView("flat");
+        setTimeout(() => filterRef.current?.focus(), 0);
+        return;
+      }
       if (typing) return;
       if (e.key === "/") {
         e.preventDefault();
@@ -531,14 +648,16 @@ export default function GLMasterPage() {
     );
   }
 
-  const activeFilters =
-    typeFilter.size +
-    (groupFilter !== "all" ? 1 : 0) +
-    (statusFilter !== "all" ? 1 : 0) +
-    (balanceFilter !== "all" ? 1 : 0) +
-    (favOnly ? 1 : 0) +
-    (search ? 1 : 0) +
-    (codeMin || codeMax ? 1 : 0);
+  const cf = colFilters;
+  const chips: { key: string; label: string; clear: () => void }[] = [];
+  if (search) chips.push({ key: "search", label: `Search: “${search}”`, clear: () => setSearch("") });
+  if (cf.code.v) chips.push({ key: "code", label: `Code ${OP_LABEL[cf.code.op]} “${cf.code.v}”`, clear: () => clearCol("code") });
+  if (cf.name.v) chips.push({ key: "name", label: `Name ${OP_LABEL[cf.name.op]} “${cf.name.v}”`, clear: () => clearCol("name") });
+  if (cf.type) chips.push({ key: "type", label: `Type: ${typeLabel(cf.type)}`, clear: () => clearCol("type") });
+  if (cf.group) chips.push({ key: "group", label: `Group: ${cf.group}`, clear: () => clearCol("group") });
+  if (cf.balance) chips.push({ key: "balance", label: cf.balance === "debit" ? "Debit" : "Credit", clear: () => clearCol("balance") });
+  if (cf.status) chips.push({ key: "status", label: cf.status === "active" ? "Active" : "Inactive", clear: () => clearCol("status") });
+  if (cf.favourite) chips.push({ key: "favourite", label: `Favourite: ${cf.favourite === "yes" ? "Yes" : "No"}`, clear: () => clearCol("favourite") });
 
   return (
     <>
@@ -581,7 +700,7 @@ export default function GLMasterPage() {
               chip={t.badge}
               bar={t.dot}
               icon={TYPE_ICON[t.type]}
-              onClick={() => setTypeFilter(new Set([t.type]))}
+              onClick={() => setCol("type", t.type)}
             />
           );
         })}
@@ -602,10 +721,10 @@ export default function GLMasterPage() {
         </div>
       )}
 
-      {/* floating filter toolbar */}
+      {/* floating toolbar — global search + view/density/columns; per-column filters live in the table's filter row */}
       <div className="sticky top-0 z-20 mb-4 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-soft backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[16rem] flex-1">
+          <div className="relative min-w-[14rem] flex-1">
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
               <Icon name="search" size={16} />
             </span>
@@ -613,69 +732,10 @@ export default function GLMasterPage() {
               ref={searchRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search code, name, group…   ( / )"
+              placeholder="Search all columns…   ( / )"
               className={`${inputClass} w-full pl-9`}
             />
           </div>
-
-          <div className="flex items-center gap-1">
-            {ACCOUNT_TYPES.map((t) => {
-              const on = typeFilter.has(t.type);
-              return (
-                <button
-                  key={t.type}
-                  onClick={() => toggleTypeFilter(t.type)}
-                  className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 transition ${
-                    on ? t.badge : "bg-white text-slate-500 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700 dark:hover:bg-slate-700"
-                  }`}
-                >
-                  {t.plural}
-                </button>
-              );
-            })}
-          </div>
-
-          <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className={`${inputClass} max-w-[11rem]`}>
-            <option value="all">All groups</option>
-            {groups.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className={inputClass}>
-            <option value="all">Any status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-          <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as BalanceFilter)} className={inputClass}>
-            <option value="all">Any balance</option>
-            <option value="debit">Debit</option>
-            <option value="credit">Credit</option>
-          </select>
-
-          <button
-            onClick={() => setFavOnly((v) => !v)}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
-              favOnly
-                ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
-                : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-            }`}
-            title="Show favourites only"
-          >
-            <Icon name="star" size={15} filled={favOnly} /> Favourites
-          </button>
-
-          <button
-            onClick={() => setAdvancedOpen((v) => !v)}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
-              advancedOpen || codeMin || codeMax
-                ? "border-brand/40 bg-brand/5 text-brand dark:text-brand-light"
-                : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-            }`}
-          >
-            <Icon name="filter" size={15} /> Advanced
-          </button>
 
           <div className="ml-auto flex items-center gap-2">
             <div className="flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-700">
@@ -706,61 +766,51 @@ export default function GLMasterPage() {
               ))}
             </div>
 
-            <div className="relative">
+            <div ref={colBtnRef} className="relative">
               <Btn onClick={() => setColMenuOpen((v) => !v)} icon="settings" title="Choose columns">
                 <span className="hidden lg:inline">Columns</span>
               </Btn>
-              {colMenuOpen && (
-                <>
-                  <div className="fixed inset-0 z-30" onClick={() => setColMenuOpen(false)} />
-                  <div className="absolute right-0 z-40 mt-1 w-48 rounded-xl border border-slate-200 bg-white p-2 shadow-soft dark:border-slate-700 dark:bg-slate-800">
-                    {(
-                      [
-                        ["type", "Type"],
-                        ["group", "Group"],
-                        ["balance", "Normal balance"],
-                        ["status", "Status"],
-                      ] as const
-                    ).map(([c, label]) => (
-                      <label key={c} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
-                        <input type="checkbox" checked={cols[c]} onChange={() => setCols((p) => ({ ...p, [c]: !p[c] }))} />
-                        {label}
-                      </label>
-                    ))}
-                    <p className="px-2 pt-1 text-[11px] text-slate-400">Code &amp; name are always shown.</p>
-                  </div>
-                </>
-              )}
+              <Popover open={colMenuOpen} anchorRef={colBtnRef} onClose={() => setColMenuOpen(false)} align="right">
+                {(
+                  [
+                    ["type", "Type"],
+                    ["group", "Group"],
+                    ["balance", "Normal balance"],
+                    ["status", "Status"],
+                  ] as const
+                ).map(([c, label]) => (
+                  <label key={c} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
+                    <input type="checkbox" checked={cols[c]} onChange={() => setCols((p) => ({ ...p, [c]: !p[c] }))} />
+                    {label}
+                  </label>
+                ))}
+                <p className="px-2 pt-1 text-[11px] text-slate-400">Code &amp; name are always shown.</p>
+              </Popover>
             </div>
           </div>
         </div>
 
-        {advancedOpen && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-sm dark:border-slate-800">
-            <span className="text-xs font-medium uppercase tracking-wide text-slate-400">Code range</span>
-            <input
-              value={codeMin}
-              onChange={(e) => setCodeMin(e.target.value.replace(/\D/g, ""))}
-              placeholder="from"
-              className={`${inputClass} w-24`}
-            />
-            <span className="text-slate-400">–</span>
-            <input
-              value={codeMax}
-              onChange={(e) => setCodeMax(e.target.value.replace(/\D/g, ""))}
-              placeholder="to"
-              className={`${inputClass} w-24`}
-            />
-          </div>
-        )}
-
-        <div className="mt-2 flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-          <span>
-            {filtered.length} of {accounts.length} account{accounts.length === 1 ? "" : "s"}
+        {/* active filter chips + count (req 5 & 6) */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            Showing <span className="font-semibold text-slate-700 dark:text-slate-200">{filtered.length}</span> of {accounts.length}{" "}
+            account{accounts.length === 1 ? "" : "s"}
           </span>
-          {activeFilters > 0 && (
-            <button onClick={resetFilters} className="inline-flex items-center gap-1 text-brand hover:underline dark:text-brand-light">
-              <Icon name="close" size={12} /> Reset filters ({activeFilters})
+          {chips.length > 0 && <span className="h-4 w-px bg-slate-200 dark:bg-slate-700" />}
+          {chips.map((c) => (
+            <span
+              key={c.key}
+              className="inline-flex items-center gap-1 rounded-full border border-brand/20 bg-brand/5 py-0.5 pl-2.5 pr-1 text-xs font-medium text-brand dark:border-brand/30 dark:text-brand-light"
+            >
+              {c.label}
+              <button onClick={c.clear} className="rounded-full p-0.5 transition hover:bg-brand/10" aria-label={`Remove ${c.label}`}>
+                <Icon name="close" size={12} />
+              </button>
+            </span>
+          ))}
+          {chips.length > 0 && (
+            <button onClick={resetFilters} className="text-xs font-medium text-slate-500 transition hover:text-red-600 hover:underline dark:text-slate-400">
+              Clear all
             </button>
           )}
         </div>
@@ -800,6 +850,10 @@ export default function GLMasterPage() {
           rows={pageRows}
           cols={cols}
           density={density}
+          colFilters={colFilters}
+          onColFilter={setCol}
+          groups={groups}
+          filterRef={filterRef}
           sortKey={sortKey}
           sortDir={sortDir}
           onSort={toggleSort}
@@ -1035,6 +1089,126 @@ function RowMenu({ onDuplicate, onHistory, onDelete }: { onDuplicate: () => void
 }
 
 // ===========================================================================
+// Filter-row cells (Excel-style per-column filters)
+// ===========================================================================
+
+function TextFilterCell({
+  value,
+  op,
+  onValue,
+  onOp,
+  placeholder,
+  inputRef,
+}: {
+  value: string;
+  op: TextOp;
+  onValue: (v: string) => void;
+  onOp: (op: TextOp) => void;
+  placeholder: string;
+  inputRef?: React.RefObject<HTMLInputElement>;
+}) {
+  const [open, setOpen] = useState(false);
+  const OPS: [TextOp, string][] = [
+    ["contains", "Contains"],
+    ["starts", "Starts with"],
+    ["ends", "Ends with"],
+    ["equals", "Equals"],
+  ];
+  return (
+    <div className="relative flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={`Match: ${OP_LABEL[op]}`}
+        aria-label={`Match type: ${OP_LABEL[op]}`}
+        className={`flex-none rounded border p-1 transition hover:bg-slate-100 dark:hover:bg-slate-700 ${
+          value ? "border-brand/40 text-brand dark:text-brand-light" : "border-slate-300 text-slate-400 dark:border-slate-700"
+        }`}
+      >
+        <Icon name="filter" size={12} />
+      </button>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onValue(e.target.value)}
+        placeholder={placeholder}
+        className="w-full min-w-0 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-800 outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+      />
+      {open && (
+        <>
+          <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-40 mt-1 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-soft dark:border-slate-700 dark:bg-slate-800">
+            {OPS.map(([o, l]) => (
+              <button
+                key={o}
+                onClick={() => {
+                  onOp(o);
+                  setOpen(false);
+                }}
+                className={`block w-full rounded px-2 py-1 text-left text-xs ${
+                  op === o
+                    ? "bg-brand/10 font-medium text-brand dark:text-brand-light"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SelectFilterCell({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`w-full min-w-0 rounded border bg-white px-1 py-1 text-xs outline-none focus:border-brand dark:bg-slate-800 ${
+        value ? "border-brand/40 text-brand dark:text-brand-light" : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
+      }`}
+    >
+      {options.map(([v, l]) => (
+        <option key={v} value={v} className="text-slate-800 dark:text-slate-100">
+          {l}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function FavFilterButton({ value, onChange }: { value: "" | "yes" | "no"; onChange: (v: "" | "yes" | "no") => void }) {
+  const next = value === "" ? "yes" : value === "yes" ? "no" : "";
+  const title = value === "" ? "Favourite: All" : value === "yes" ? "Favourite: Yes" : "Favourite: No";
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(next)}
+      title={title}
+      aria-label={title}
+      className={`relative rounded p-1 transition hover:bg-slate-100 dark:hover:bg-slate-700 ${
+        value === "yes" ? "text-amber-400" : value === "no" ? "text-slate-400" : "text-slate-300 dark:text-slate-600"
+      }`}
+    >
+      <Icon name="star" size={15} filled={value === "yes"} />
+      {value === "no" && (
+        <span className="absolute inset-0 flex items-center justify-center text-[15px] font-bold leading-none text-red-500">⁄</span>
+      )}
+    </button>
+  );
+}
+
+// ===========================================================================
 // Flat table
 // ===========================================================================
 
@@ -1042,6 +1216,10 @@ function FlatTable({
   rows,
   cols,
   density,
+  colFilters,
+  onColFilter,
+  groups,
+  filterRef,
   sortKey,
   sortDir,
   onSort,
@@ -1062,6 +1240,10 @@ function FlatTable({
   rows: GLAccount[];
   cols: { type: boolean; group: boolean; balance: boolean; status: boolean };
   density: Density;
+  colFilters: ColFilters;
+  onColFilter: <K extends keyof ColFilters>(key: K, val: ColFilters[K]) => void;
+  groups: string[];
+  filterRef: React.RefObject<HTMLInputElement>;
   sortKey: SortKey;
   sortDir: "asc" | "desc";
   onSort: (k: SortKey) => void;
@@ -1101,13 +1283,90 @@ function FlatTable({
                 />
               </th>
               <th className="w-9 bg-inherit px-1 py-3" />
-              <SortHeader label="Code" active={sortKey === "code"} dir={sortDir} onClick={() => onSort("code")} className="sticky left-[5rem] z-20 w-24 bg-inherit" />
+              <SortHeader label="Code" active={sortKey === "code"} dir={sortDir} onClick={() => onSort("code")} className="sticky left-[5rem] z-20 w-28 bg-inherit" />
               <SortHeader label="Account name" active={sortKey === "name"} dir={sortDir} onClick={() => onSort("name")} className="bg-inherit" />
               {cols.type && <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onSort("type")} className="w-28 bg-inherit" />}
               {cols.group && <SortHeader label="Group" active={sortKey === "parent_group"} dir={sortDir} onClick={() => onSort("parent_group")} className="w-44 bg-inherit" />}
               {cols.balance && <th className="w-28 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
               {cols.status && <th className="w-24 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Status</th>}
               <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
+            </tr>
+            {/* filter row — sticky with the header, per-column filters (req 1, 2, 3, 10) */}
+            <tr className="bg-white dark:bg-slate-900">
+              <th className="sticky left-0 z-20 w-11 border-b border-slate-200 bg-inherit px-3 py-1.5 dark:border-slate-800" />
+              <th className="w-9 border-b border-slate-200 bg-inherit px-1 py-1.5 dark:border-slate-800">
+                <FavFilterButton value={colFilters.favourite} onChange={(v) => onColFilter("favourite", v)} />
+              </th>
+              <th className="sticky left-[5rem] z-20 w-28 border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                <TextFilterCell
+                  value={colFilters.code.v}
+                  op={colFilters.code.op}
+                  placeholder="Code…"
+                  inputRef={filterRef}
+                  onValue={(v) => onColFilter("code", { ...colFilters.code, v })}
+                  onOp={(op) => onColFilter("code", { ...colFilters.code, op })}
+                />
+              </th>
+              <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                <TextFilterCell
+                  value={colFilters.name.v}
+                  op={colFilters.name.op}
+                  placeholder="Account name…"
+                  onValue={(v) => onColFilter("name", { ...colFilters.name, v })}
+                  onOp={(op) => onColFilter("name", { ...colFilters.name, op })}
+                />
+              </th>
+              {cols.type && (
+                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                  <SelectFilterCell
+                    value={colFilters.type}
+                    onChange={(v) => onColFilter("type", v as ColFilters["type"])}
+                    options={[
+                      ["", "All types"],
+                      ["asset", "Asset"],
+                      ["liability", "Liability"],
+                      ["income", "Income"],
+                      ["expense", "Expense"],
+                    ]}
+                  />
+                </th>
+              )}
+              {cols.group && (
+                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                  <SelectFilterCell
+                    value={colFilters.group}
+                    onChange={(v) => onColFilter("group", v)}
+                    options={[["", "All groups"], ...groups.map((g) => [g, g] as [string, string])]}
+                  />
+                </th>
+              )}
+              {cols.balance && (
+                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                  <SelectFilterCell
+                    value={colFilters.balance}
+                    onChange={(v) => onColFilter("balance", v as ColFilters["balance"])}
+                    options={[
+                      ["", "All"],
+                      ["debit", "Debit"],
+                      ["credit", "Credit"],
+                    ]}
+                  />
+                </th>
+              )}
+              {cols.status && (
+                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
+                  <SelectFilterCell
+                    value={colFilters.status}
+                    onChange={(v) => onColFilter("status", v as ColFilters["status"])}
+                    options={[
+                      ["", "All"],
+                      ["active", "Active"],
+                      ["inactive", "Inactive"],
+                    ]}
+                  />
+                </th>
+              )}
+              <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800" />
             </tr>
           </thead>
           <tbody>
