@@ -67,7 +67,7 @@ const TYPE_ICON: Record<AccountType, IconName> = {
   expense: "bars",
 };
 
-type SortKey = "code" | "name" | "type" | "parent_group";
+type SortKey = "code" | "name" | "type" | "parent_group" | "balance";
 type ViewMode = "flat" | "grouped";
 type DrawerMode = "create" | "edit" | "view";
 type Density = "comfortable" | "compact";
@@ -521,6 +521,7 @@ export default function GLMasterPage() {
       if (sortKey === "code") cmp = a.code.localeCompare(b.code, undefined, { numeric: true });
       else if (sortKey === "name") cmp = a.name.localeCompare(b.name);
       else if (sortKey === "type") cmp = a.type.localeCompare(b.type);
+      else if (sortKey === "balance") cmp = typeMeta(a.type).normalBalance.localeCompare(typeMeta(b.type).normalBalance);
       else cmp = (a.parent_group ?? "").localeCompare(b.parent_group ?? "");
       return sortDir === "asc" ? cmp : -cmp;
     });
@@ -1414,7 +1415,15 @@ function FlatTable({
               <SortHeader label="Account name" active={sortKey === "name"} dir={sortDir} onClick={() => onSort("name")} className="bg-inherit" />
               {cols.type && <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onSort("type")} className="w-28 bg-inherit" />}
               {cols.group && <SortHeader label="Group" active={sortKey === "parent_group"} dir={sortDir} onClick={() => onSort("parent_group")} className="w-44 bg-inherit" />}
-              {cols.balance && <th className="w-32 whitespace-nowrap bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Debit / Credit</th>}
+              {cols.balance && (
+                <SortHeader
+                  label="Debit / Credit"
+                  active={sortKey === "balance"}
+                  dir={sortDir}
+                  onClick={() => onSort("balance")}
+                  className="w-32 whitespace-nowrap bg-inherit"
+                />
+              )}
               {cols.amount && <th className="w-32 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
               {cols.status && <th className="w-24 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Status</th>}
               <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
