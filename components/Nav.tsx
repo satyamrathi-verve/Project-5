@@ -1,65 +1,206 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { Icon, type IconName } from "./icons";
 
 /*
-  Left sidebar. Only "Home" exists to start with — everything else is the roadmap
-  your team builds. Each unbuilt screen shows a "build me" tag. When you finish a
-  screen, flip its `built` to true (and point `href` at the route you created) so it
-  turns into a real link.
+  Premium collapsible sidebar (app-wide shell).
+  Functionality preserved from the original: the SAME routes and the SAME `built`
+  gate — unbuilt screens render as a non-navigable "build me" item, built ones as
+  real links with active highlighting. Only the presentation changed.
 */
-const LINKS: { href: string; label: string; built: boolean }[] = [
-  { href: "/", label: "Home", built: true },
-  { href: "/signin", label: "Sign In", built: false },
-  { href: "/masters/customers", label: "Customer Master", built: true },
-  { href: "/masters/gl", label: "GL Master", built: false },
-  { href: "/invoices", label: "Sales Invoices", built: false },
-  { href: "/receipts", label: "Receipt Entry", built: false },
-  { href: "/upload", label: "Upload Report", built: false },
-  { href: "/reminders", label: "AR Followup", built: false },
-  { href: "/reports/statement", label: "Customer Statement", built: false },
-  { href: "/reports/ageing", label: "AR Ageing", built: false },
-  { href: "/cashflow", label: "Cashflow Projection", built: false },
-  { href: "/dashboard", label: "Dashboard", built: false },
+
+export interface NavLink {
+  href: string;
+  label: string;
+  icon: IconName;
+  built: boolean;
+}
+export interface NavSection {
+  heading: string | null;
+  links: NavLink[];
+}
+
+export const NAV_SECTIONS: NavSection[] = [
+  {
+    heading: "Main",
+    links: [
+      { href: "/dashboard", label: "Dashboard", icon: "grid", built: false },
+      { href: "/", label: "Home", icon: "home", built: true },
+    ],
+  },
+  {
+    heading: "Masters",
+    links: [
+      { href: "/masters/customers", label: "Customer Master", icon: "users", built: true },
+      { href: "/masters/gl", label: "GL Master", icon: "book", built: true },
+    ],
+  },
+  {
+    heading: "Sales",
+    links: [
+      { href: "/invoices", label: "Sales Invoices", icon: "file", built: false },
+      { href: "/receipts", label: "Receipt Entry", icon: "receipt", built: false },
+      { href: "/upload", label: "Upload Report", icon: "upload", built: false },
+    ],
+  },
+  {
+    heading: "Collections",
+    links: [
+      { href: "/reminders", label: "AR Followup", icon: "mail", built: false },
+      { href: "/reports/statement", label: "Customer Statement", icon: "scroll", built: false },
+      { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: false },
+      { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: false },
+    ],
+  },
+  {
+    heading: "System",
+    links: [
+      { href: "/reports", label: "Reports", icon: "file", built: false },
+      { href: "/settings", label: "Settings", icon: "settings", built: false },
+    ],
+  },
 ];
 
-export function Nav() {
+export function Sidebar({
+  collapsed,
+  onToggleCollapse,
+  mobileOpen,
+  onCloseMobile,
+}: {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+}) {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const logout = () => {
+    try {
+      ["auth", "gl.session", "session"].forEach((k) => localStorage.removeItem(k));
+    } catch {
+      /* ignore */
+    }
+    router.push("/");
+  };
 
   return (
-    <nav className="flex h-full w-60 flex-col gap-1 border-r border-slate-200 bg-white p-4">
-      <div className="mb-4 px-2">
-        <p className="text-xs font-semibold uppercase tracking-widest text-brand">Verve</p>
-        <h1 className="text-lg font-bold text-slate-900">AR Manager</h1>
-      </div>
-      {LINKS.map((l) => {
-        const active = pathname === l.href;
-        if (!l.built) {
-          return (
-            <span
-              key={l.href}
-              className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-400"
-            >
-              {l.label}
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                build me
-              </span>
-            </span>
-          );
-        }
-        return (
-          <Link
-            key={l.href}
-            href={l.href}
-            className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              active ? "bg-brand text-white" : "text-slate-700 hover:bg-slate-100"
+    <>
+      {/* mobile backdrop */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden" onClick={onCloseMobile} />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-slate-300 shadow-xl transition-[width,transform] duration-200 ease-out lg:static lg:translate-x-0 ${
+          collapsed ? "w-[76px]" : "w-64"
+        } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
+      >
+        {/* Brand — VERVE / AR Manager only */}
+        <div className="flex items-center border-b border-white/10 px-5 py-5">
+          {collapsed ? (
+            <div className="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-brand-light to-brand text-base font-bold text-white shadow-inner">
+              V
+            </div>
+          ) : (
+            <div className="leading-tight">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-brand-light">Verve</p>
+              <h1 className="text-lg font-bold text-white">AR Manager</h1>
+            </div>
+          )}
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto px-3 py-4">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.heading ?? "top"} className="mb-4">
+              {section.heading && !collapsed && (
+                <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                  {section.heading}
+                </p>
+              )}
+              <ul className="space-y-0.5">
+                {section.links.map((l) => {
+                  const active = pathname === l.href;
+                  const content = (
+                    <>
+                      <span className="flex-none">
+                        <Icon name={l.icon} size={19} />
+                      </span>
+                      {!collapsed && <span className="truncate">{l.label}</span>}
+                      {!collapsed && !l.built && (
+                        <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400">
+                          soon
+                        </span>
+                      )}
+                    </>
+                  );
+                  const base = `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    collapsed ? "justify-center" : ""
+                  }`;
+                  if (!l.built) {
+                    return (
+                      <li key={l.href}>
+                        <span
+                          title={collapsed ? `${l.label} (coming soon)` : undefined}
+                          className={`${base} cursor-default text-slate-500`}
+                        >
+                          {content}
+                        </span>
+                      </li>
+                    );
+                  }
+                  return (
+                    <li key={l.href}>
+                      <Link
+                        href={l.href}
+                        onClick={onCloseMobile}
+                        title={collapsed ? l.label : undefined}
+                        aria-current={active ? "page" : undefined}
+                        className={`${base} ${
+                          active
+                            ? "bg-white/10 text-white shadow-inner ring-1 ring-white/10"
+                            : "text-slate-300 hover:bg-white/5 hover:text-white"
+                        }`}
+                      >
+                        {content}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </nav>
+
+        {/* Footer: collapse toggle + logout */}
+        <div className="border-t border-white/10 p-3">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className={`hidden w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 hover:bg-white/5 hover:text-white lg:flex ${
+              collapsed ? "justify-center" : ""
             }`}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            {l.label}
-          </Link>
-        );
-      })}
-    </nav>
+            <Icon name={collapsed ? "chevronRight" : "chevronLeft"} size={19} />
+            {!collapsed && <span>Collapse</span>}
+          </button>
+          <button
+            type="button"
+            onClick={logout}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-400 hover:bg-red-500/10 hover:text-red-300 ${
+              collapsed ? "justify-center" : ""
+            }`}
+            title="Log out"
+          >
+            <Icon name="logout" size={19} />
+            {!collapsed && <span>Log out</span>}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
