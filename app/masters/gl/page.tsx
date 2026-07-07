@@ -517,6 +517,18 @@ export default function GLMasterPage() {
     [recent, accounts],
   );
 
+  // Total balance per category, summed from the (derived) per-account balances.
+  // All 0.00 today; updates automatically once transactions post to the ledger.
+  const categoryTotals = useMemo(() => {
+    const t = { total: 0, asset: 0, liability: 0, income: 0, expense: 0 };
+    for (const a of accounts) {
+      const b = balances[a.id] ?? 0;
+      t.total += b;
+      t[a.type] += b;
+    }
+    return t;
+  }, [accounts, balances]);
+
   useEffect(() => {
     setPage(1);
   }, [search, colFilters, pageSize]);
@@ -719,6 +731,8 @@ export default function GLMasterPage() {
         <SummaryCard
           label="Total Accounts"
           value={accounts.length}
+          balance={categoryTotals.total}
+          currency={currency}
           chip="bg-brand/10 text-brand ring-1 ring-brand/20 dark:bg-brand/20 dark:text-brand-light"
           icon="grid"
         />
@@ -729,6 +743,8 @@ export default function GLMasterPage() {
               key={t.type}
               label={t.plural}
               value={count}
+              balance={categoryTotals[t.type]}
+              currency={currency}
               chip={t.badge}
               icon={TYPE_ICON[t.type]}
               onClick={() => setCol("type", t.type)}
@@ -1035,17 +1051,23 @@ export default function GLMasterPage() {
 function SummaryCard({
   label,
   value,
+  balance,
+  currency,
   chip,
   icon,
   onClick,
 }: {
   label: string;
   value: number;
+  /** Total balance for the category (summed from per-account balances). */
+  balance: number;
+  currency: string;
   /** Icon-chip classes (soft coloured bg + coloured icon), light + dark. */
   chip: string;
   icon: IconName;
   onClick?: () => void;
 }) {
+  const negative = balance < 0;
   return (
     <button
       onClick={onClick}
@@ -1056,6 +1078,13 @@ function SummaryCard({
         <div>
           <p className="text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-400">{label}</p>
           <p className="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{value}</p>
+          <p
+            className={`mt-1 text-sm font-semibold tabular-nums ${
+              negative ? "text-red-600 dark:text-red-400" : "text-slate-700 dark:text-slate-300"
+            }`}
+          >
+            {formatMoney(balance, currency)}
+          </p>
         </div>
         <span className={`grid h-10 w-10 place-items-center rounded-xl ${chip}`}>
           <Icon name={icon} size={20} />
