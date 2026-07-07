@@ -12,7 +12,7 @@ import { usePathname } from "next/navigation";
 const LINKS: { href: string; label: string; built: boolean }[] = [
   { href: "/", label: "Home", built: true },
   { href: "/signin", label: "Sign In", built: false },
-  { href: "/masters/customers", label: "Customer Master", built: false },
+  { href: "/masters/customers", label: "Customer Master", built: true },
   { href: "/masters/gl", label: "GL Master", built: false },
   { href: "/invoices", label: "Sales Invoices", built: false },
   { href: "/receipts", label: "Receipt Entry", built: false },
