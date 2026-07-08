@@ -7,6 +7,7 @@ import { DataTable, type Column } from "@/components/DataTable";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { Icon } from "@/components/icons";
+import { buildStatement, downloadStatementPdf } from "@/lib/statement";
 
 /*
   AR Followup — Auto Email Shoot.
@@ -138,6 +139,9 @@ export default function AutoEmailShootPage() {
 
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<CustomerReminder[] | null>(null);
+
+  // Which customer's PDF is being generated right now (disables the buttons).
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   // Monthly statement shoot state.
   const [dues, setDues] = useState<DuesCustomer[]>([]);
@@ -452,6 +456,31 @@ export default function AutoEmailShootPage() {
 
   const preview = previewId ? reminders.find((r) => r.id === previewId) ?? null : null;
 
+  /** Fetch one customer's full data and save their statement as a real .pdf file. */
+  async function downloadStatement(customerId: string) {
+    if (!supabase || downloadingId) return;
+    setDownloadingId(customerId);
+    try {
+      const [coRes, custRes, invRes, rcptRes, allocRes] = await Promise.all([
+        supabase.from("company").select("*").limit(1),
+        supabase.from("customers").select("*").eq("id", customerId).limit(1),
+        supabase.from("invoices").select("*").eq("customer_id", customerId).order("invoice_date"),
+        supabase.from("receipts").select("*").eq("customer_id", customerId).order("receipt_date"),
+        supabase.from("receipt_allocations").select("invoice_id, amount"),
+      ]);
+      const firstError = coRes.error || custRes.error || invRes.error || rcptRes.error || allocRes.error;
+      if (firstError) throw new Error(firstError.message);
+      const cust = custRes.data?.[0];
+      if (!cust) throw new Error("Customer not found.");
+      const stmt = buildStatement(cust, invRes.data ?? [], rcptRes.data ?? [], allocRes.data ?? []);
+      await downloadStatementPdf(coRes.data?.[0] ?? null, cust, stmt);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not generate the PDF.");
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
   function chasedBadge(r: CustomerReminder) {
     if (r.days_since_reminded === null) return <span className="text-slate-400 dark:text-slate-500">Never</span>;
     const label = r.days_since_reminded === 0 ? "Today" : `${r.days_since_reminded}d ago`;
@@ -532,15 +561,18 @@ export default function AutoEmailShootPage() {
       className: "w-20 text-right",
       render: (r) => (
         <span className="inline-flex items-center gap-2.5">
-          <a
-            href={`/reports/statement?customer=${r.id}`}
-            target="_blank"
-            onClick={(e) => e.stopPropagation()}
-            title="Open account statement (PDF)"
-            className="text-slate-400 transition hover:text-brand"
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadStatement(r.id);
+            }}
+            disabled={downloadingId !== null}
+            title="Download account statement (.pdf)"
+            className="text-slate-400 transition hover:text-brand disabled:opacity-40"
           >
-            <Icon name="file" size={16} />
-          </a>
+            <Icon name={downloadingId === r.id ? "clock" : "download"} size={16} />
+          </button>
           <Icon
             name="eye"
             size={17}
@@ -563,6 +595,21 @@ export default function AutoEmailShootPage() {
         render: (r) => r.invoices.map((i) => i.invoice_no).join(", "),
       },
       { key: "subject", header: "Subject" },
+      {
+        key: "pdf",
+        header: "Statement",
+        className: "w-28",
+        render: (r) => (
+          <button
+            onClick={() => downloadStatement(r.id)}
+            disabled={downloadingId !== null}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-brand hover:underline disabled:opacity-50"
+          >
+            <Icon name="download" size={15} />
+            {downloadingId === r.id ? "…" : "PDF"}
+          </button>
+        ),
+      },
       {
         key: "status",
         header: "Status",
@@ -774,16 +821,27 @@ export default function AutoEmailShootPage() {
           <pre className="mt-2 whitespace-pre-wrap font-sans text-sm text-slate-700 dark:text-slate-300">
             {preview.body}
           </pre>
-          {/* The "attachment" — opens the print-ready statement (browser Print → PDF) */}
-          <a
-            href={`/reports/statement?customer=${preview.id}`}
-            target="_blank"
-            className="mt-4 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-brand hover:text-brand dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:border-brand"
-          >
-            <Icon name="file" size={16} className="text-brand" />
-            Account Statement — {preview.customer_name}.pdf
-            <span className="text-xs font-normal text-slate-400">open</span>
-          </a>
+          {/* The "attachment" — click to download the real .pdf file */}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => downloadStatement(preview.id)}
+              disabled={downloadingId !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-brand hover:text-brand disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200 dark:hover:border-brand"
+            >
+              <Icon name="download" size={16} className="text-brand" />
+              Account Statement — {preview.customer_name}.pdf
+              <span className="text-xs font-normal text-slate-400">
+                {downloadingId === preview.id ? "generating…" : "download"}
+              </span>
+            </button>
+            <a
+              href={`/reports/statement?customer=${preview.id}`}
+              target="_blank"
+              className="text-xs font-medium text-brand hover:underline"
+            >
+              view online
+            </a>
+          </div>
         </div>
       )}
 

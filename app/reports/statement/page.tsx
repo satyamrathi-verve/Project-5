@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { inputClass } from "@/components/FormField";
 import { Icon } from "@/components/icons";
+import { buildStatement, downloadStatementPdf } from "@/lib/statement";
 
 /*
   Report — Customer Statement (the "account statement PDF").
@@ -23,16 +24,6 @@ import { Icon } from "@/components/icons";
 
 const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 const dmed = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
-
-interface LedgerRow {
-  id: string;
-  date: string; // ISO date, "" for the opening row
-  particulars: string;
-  ref: string;
-  debit: number | null;
-  credit: number | null;
-  balance: number;
-}
 
 function StatementInner() {
   const router = useRouter();
@@ -87,73 +78,24 @@ function StatementInner() {
     })();
   }, [selectedId]);
 
-  const ledger = useMemo<LedgerRow[]>(() => {
-    if (!customer) return [];
-    type Entry = { date: string; kind: 0 | 1; particulars: string; ref: string; debit: number | null; credit: number | null; id: string };
-    const entries: Entry[] = [
-      ...invoices.map<Entry>((i) => ({
-        date: i.invoice_date,
-        kind: 0, // invoices before receipts on the same day
-        particulars: `Invoice ${i.invoice_no}`,
-        ref: i.invoice_no,
-        debit: Number(i.total),
-        credit: null,
-        id: `inv-${i.id}`,
-      })),
-      ...receipts.map<Entry>((r) => ({
-        date: r.receipt_date,
-        kind: 1,
-        particulars: `Receipt ${r.receipt_no} (${r.mode.toUpperCase()}${r.reference ? ` · ${r.reference}` : ""})`,
-        ref: r.receipt_no,
-        debit: null,
-        credit: Number(r.amount),
-        id: `rcpt-${r.id}`,
-      })),
-    ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.kind - b.kind));
+  // One shared computation (lib/statement.ts) drives the screen AND the PDF.
+  const stmt = useMemo(
+    () => (customer ? buildStatement(customer, invoices, receipts, allocations) : null),
+    [customer, invoices, receipts, allocations]
+  );
+  const ledger = stmt?.ledger ?? [];
+  const summary = stmt?.summary ?? null;
 
-    let balance = Number(customer.opening_balance) || 0;
-    const rows: LedgerRow[] = [
-      { id: "opening", date: "", particulars: "Opening balance", ref: "", debit: null, credit: null, balance },
-    ];
-    for (const e of entries) {
-      balance += (e.debit ?? 0) - (e.credit ?? 0);
-      rows.push({ ...e, balance });
+  const [pdfBusy, setPdfBusy] = useState(false);
+  async function downloadPdf() {
+    if (!customer || !stmt || pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      await downloadStatementPdf(company, customer, stmt);
+    } finally {
+      setPdfBusy(false);
     }
-    return rows;
-  }, [customer, invoices, receipts]);
-
-  const summary = useMemo(() => {
-    if (!customer) return null;
-    const totalInvoiced = invoices.reduce((s, i) => s + Number(i.total), 0);
-    const totalReceived = receipts.reduce((s, r) => s + Number(r.amount), 0);
-    const closing = (Number(customer.opening_balance) || 0) + totalInvoiced - totalReceived;
-
-    const lastReceipt = receipts.length
-      ? receipts.reduce((a, b) => (a.receipt_date > b.receipt_date ? a : b))
-      : null;
-
-    const paidByInvoice = new Map<string, number>();
-    for (const a of allocations) {
-      paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
-    }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    let overdueAmount = 0;
-    let oldestDays = 0;
-    let partPaid = 0;
-    for (const i of invoices) {
-      const alloc = paidByInvoice.get(i.id) ?? 0;
-      const out = Number(i.total) - alloc;
-      if (alloc > 0 && out > 0) partPaid++;
-      if (i.status === "paid" || out <= 0) continue;
-      const due = new Date(`${i.due_date}T00:00:00`);
-      if (due < today) {
-        overdueAmount += out;
-        oldestDays = Math.max(oldestDays, Math.floor((today.getTime() - due.getTime()) / 86_400_000));
-      }
-    }
-    return { totalInvoiced, totalReceived, closing, lastReceipt, overdueAmount, oldestDays, partPaid };
-  }, [customer, invoices, receipts, allocations]);
+  }
 
   if (!supabase) return <NotConfigured />;
 
@@ -166,13 +108,22 @@ function StatementInner() {
           subtitle="The full account story for one customer — print it or save it as the PDF."
           action={
             customer && (
-              <button
-                onClick={() => window.print()}
-                className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
-              >
-                <Icon name="download" size={17} />
-                Print / Save as PDF
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={downloadPdf}
+                  disabled={pdfBusy}
+                  className="flex items-center gap-2 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                >
+                  <Icon name="download" size={17} />
+                  {pdfBusy ? "Generating…" : "Download PDF"}
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  Print
+                </button>
+              </div>
             )
           }
         />
