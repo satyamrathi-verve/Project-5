@@ -17,6 +17,7 @@ import {
   forecastSourceLabel,
   type ForecastItem,
   type ForecastPoint,
+  type UpcomingEvent,
 } from "@/lib/cashflow";
 import { KpiCard } from "./KpiCard";
 import { ForecastChart } from "./charts";
@@ -25,6 +26,7 @@ import { Card, EmptyState, Money, Segmented } from "./ui";
 export function ForecastView({
   items,
   points,
+  events,
   horizonDays,
   onHorizon,
   expectedIn,
@@ -34,6 +36,7 @@ export function ForecastView({
 }: {
   items: ForecastItem[];
   points: ForecastPoint[];
+  events: UpcomingEvent[];
   horizonDays: number;
   onHorizon: (days: number) => void;
   expectedIn: number;
@@ -75,11 +78,43 @@ export function ForecastView({
         <KpiCard label="Projected Closing" amount={projectedClosing} currency={currency} icon="bars" tone="brand" hint="Opening + Net Forecast" />
       </div>
 
-      <Card title="Projected Cash Balance" subtitle={`Next ${horizonDays} days`}>
-        <div className="p-4">
-          <ForecastChart data={points} currency={currency} />
-        </div>
-      </Card>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <Card title="Projected Cash Balance" subtitle={`Next ${horizonDays} days`} className="xl:col-span-2">
+          <div className="p-4">
+            <ForecastChart data={points} currency={currency} />
+          </div>
+        </Card>
+
+        <Card title="Upcoming Events" subtitle={`Scheduled cash over the next ${horizonDays} days`} className="h-full">
+          {events.length === 0 ? (
+            <EmptyState icon="clock" title="No upcoming events" message="Scheduled receipts and payments appear here." compact />
+          ) : (
+            <ol className="max-h-[420px] space-y-0 overflow-y-auto px-5 py-3">
+              {events.map((e, idx) => (
+                <li key={e.date} className="relative flex gap-3 pb-4 last:pb-0">
+                  {idx < events.length - 1 && <span className="absolute left-[5px] top-4 h-full w-px bg-slate-200 dark:bg-slate-700" />}
+                  <span className={`mt-1 h-2.5 w-2.5 flex-none rounded-full ring-4 ring-white dark:ring-slate-900 ${e.in >= e.out ? "bg-emerald-500" : "bg-red-400"}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">{e.dateLabel}</span>
+                      <Money amount={e.in - e.out} currency={currency} tone="auto" className="text-xs font-semibold" />
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {e.items.slice(0, 4).map((it, i) => (
+                        <li key={i} className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                          <span className="truncate">{it.label}</span>
+                          <Money amount={it.direction === "in" ? it.amount : -it.amount} currency={currency} tone={it.direction} />
+                        </li>
+                      ))}
+                      {e.items.length > 4 && <li className="text-[11px] text-slate-400">+{e.items.length - 4} more</li>}
+                    </ul>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
+      </div>
 
       <Card title="Forecast by Source" subtitle="Where projected cash movements originate">
         <div className="overflow-x-auto p-2">

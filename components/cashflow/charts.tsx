@@ -11,8 +11,11 @@
 */
 
 import { formatMoney } from "@/lib/balances";
-import type { BalancePoint, ForecastPoint, PeriodPoint } from "@/lib/cashflow";
+import type { BalancePoint, ForecastPoint, PeriodPoint, Slice } from "@/lib/cashflow";
 import { EmptyState } from "./ui";
+
+// Shared categorical palette (hex so it works in SVG fill + legend swatches).
+export const PALETTE = ["#4f46e5", "#10b981", "#f59e0b", "#0ea5e9", "#f43f5e", "#8b5cf6", "#94a3b8"];
 
 const W = 760;
 const H = 240;
@@ -194,6 +197,90 @@ export function BalanceChart({ data, currency }: { data: BalancePoint[]; currenc
 }
 
 // ── Forecast (projected cumulative line + in/out) ─────────────────────────────
+
+// ── Donut (Cash by Category) ──────────────────────────────────────────────────
+
+export function DonutChart({ data, currency }: { data: Slice[]; currency: string }) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total === 0)
+    return <EmptyState icon="bars" title="No category data yet" message="Spending by category appears here once cash is posted." compact />;
+
+  const cx = 90;
+  const cy = 90;
+  const r = 68;
+  const stroke = 26;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+
+  return (
+    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+      <svg viewBox="0 0 180 180" className="h-44 w-44 flex-none -rotate-90">
+        {data.map((d, i) => {
+          const frac = d.value / total;
+          const dash = frac * circ;
+          const seg = (
+            <circle
+              key={i}
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="none"
+              stroke={PALETTE[i % PALETTE.length]}
+              strokeWidth={stroke}
+              strokeDasharray={`${dash} ${circ - dash}`}
+              strokeDashoffset={-offset}
+            >
+              <title>{`${d.label} · ${formatMoney(d.value, currency)} (${d.pct.toFixed(1)}%)`}</title>
+            </circle>
+          );
+          offset += dash;
+          return seg;
+        })}
+      </svg>
+      <ul className="w-full space-y-1.5">
+        {data.map((d, i) => (
+          <li key={i} className="flex items-center gap-2 text-sm">
+            <span className="h-3 w-3 flex-none rounded-sm" style={{ backgroundColor: PALETTE[i % PALETTE.length] }} />
+            <span className="flex-1 truncate text-slate-600 dark:text-slate-300">{d.label}</span>
+            <span className="font-medium tabular-nums text-slate-700 dark:text-slate-200">{d.pct.toFixed(0)}%</span>
+            <span className="w-24 text-right tabular-nums text-slate-500 dark:text-slate-400">{formatMoney(d.value, currency)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ── Horizontal bars (Cash by Bank) ────────────────────────────────────────────
+
+export function HBarChart({ data, currency }: { data: { name: string; value: number }[]; currency: string }) {
+  if (data.length === 0) return <EmptyState icon="book" title="No bank data" compact />;
+  const max = Math.max(1, ...data.map((d) => Math.abs(d.value)));
+  return (
+    <ul className="space-y-3">
+      {data.map((d, i) => {
+        const w = (Math.abs(d.value) / max) * 100;
+        const neg = d.value < 0;
+        return (
+          <li key={i}>
+            <div className="mb-1 flex items-center justify-between text-sm">
+              <span className="truncate text-slate-600 dark:text-slate-300">{d.name}</span>
+              <span className={`tabular-nums font-medium ${neg ? "text-red-600 dark:text-red-400" : "text-slate-700 dark:text-slate-200"}`}>
+                {formatMoney(d.value, currency)}
+              </span>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+              <div
+                className={`h-full rounded-full ${neg ? "bg-red-400" : "bg-brand"}`}
+                style={{ width: `${Math.max(2, w)}%`, backgroundColor: neg ? undefined : PALETTE[i % PALETTE.length] }}
+              />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 export function ForecastChart({ data, currency }: { data: ForecastPoint[]; currency: string }) {
   if (data.length === 0)

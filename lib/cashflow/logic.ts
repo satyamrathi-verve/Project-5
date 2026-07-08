@@ -12,6 +12,7 @@
 
 import {
   type BalancePoint,
+  type BankAccount,
   type CashFlowCategoryId,
   type CashFlowFilters,
   type CashFlowKpis,
@@ -21,7 +22,8 @@ import {
   type ForecastPoint,
   type PeriodPoint,
 } from "./types";
-import { dayLabel, inRange, monthKey, monthLabel, toISODate } from "./dates";
+import type { IconName } from "@/components/icons";
+import { addDays, dayLabel, formatDate, inRange, monthKey, monthLabel, toISODate } from "./dates";
 
 // ── KPIs ───────────────────────────────────────────────────────────────────
 
@@ -244,4 +246,161 @@ export function pageCount(total: number, pageSize: number): number {
 /** Sum of bank opening balances = period opening cash (0 while gated). */
 export function openingCash(bankOpeningBalances: number[]): number {
   return bankOpeningBalances.reduce((s, v) => s + v, 0);
+}
+
+// ── Momentum / trend (current window vs the equal window before it) ────────────
+
+export interface Momentum {
+  inPct: number | null; // null when there is no baseline to compare against
+  outPct: number | null;
+  netPct: number | null;
+  windowDays: number;
+}
+
+function pctChange(cur: number, prev: number): number | null {
+  if (prev === 0) return cur === 0 ? 0 : null;
+  return ((cur - prev) / Math.abs(prev)) * 100;
+}
+
+/** Compare the last `days` against the `days` before that — the trend on KPI cards. */
+export function momentum(txns: CashFlowTxn[], today: Date, days = 30): Momentum {
+  const endISO = toISODate(today);
+  const midISO = toISODate(addDays(today, -days));
+  const startISO = toISODate(addDays(today, -2 * days));
+  let curIn = 0, curOut = 0, prevIn = 0, prevOut = 0;
+  for (const t of txns) {
+    if (t.date > midISO && t.date <= endISO) {
+      curIn += t.cashIn || 0;
+      curOut += t.cashOut || 0;
+    } else if (t.date > startISO && t.date <= midISO) {
+      prevIn += t.cashIn || 0;
+      prevOut += t.cashOut || 0;
+    }
+  }
+  return {
+    inPct: pctChange(curIn, prevIn),
+    outPct: pctChange(curOut, prevOut),
+    netPct: pctChange(curIn - curOut, prevIn - prevOut),
+    windowDays: days,
+  };
+}
+
+// ── Composition breakdowns (donut / bar) ──────────────────────────────────────
+
+export interface Slice {
+  label: string;
+  value: number;
+  pct: number;
+}
+
+/** Cash grouped by department (business category), top N + "Others". */
+export function cashByCategory(txns: CashFlowTxn[], dir: "in" | "out", topN = 5): Slice[] {
+  const totals = new Map<string, number>();
+  let grand = 0;
+  for (const t of txns) {
+    const amt = dir === "in" ? t.cashIn || 0 : t.cashOut || 0;
+    if (!amt) continue;
+    const key = t.department ?? "Other";
+    totals.set(key, (totals.get(key) ?? 0) + amt);
+    grand += amt;
+  }
+  const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const top = sorted.slice(0, topN);
+  const rest = sorted.slice(topN).reduce((s, [, v]) => s + v, 0);
+  const slices = top.map(([label, value]) => ({ label, value, pct: grand ? (value / grand) * 100 : 0 }));
+  if (rest > 0) slices.push({ label: "Others", value: rest, pct: grand ? (rest / grand) * 100 : 0 });
+  return slices;
+}
+
+/** Current balance per bank account (opening + net movement in the given txns). */
+export function cashByBank(banks: BankAccount[], txns: CashFlowTxn[]): { name: string; value: number }[] {
+  return banks.map((b) => {
+    let net = 0;
+    for (const t of txns) if (t.bankAccountId === b.id) net += (t.cashIn || 0) - (t.cashOut || 0);
+    return { name: b.name, value: b.openingBalance + net };
+  });
+}
+
+// ── Smart insights (heuristics over the data) ─────────────────────────────────
+
+export interface Insight {
+  id: string;
+  icon: IconName;
+  tone: "up" | "down" | "warn" | "info";
+  text: string;
+}
+
+/**
+ * Derive a handful of at-a-glance insights: cash momentum, upcoming payroll,
+ * largest recent payment, next expected receipt, and any low-balance account.
+ */
+export function buildInsights(
+  txns: CashFlowTxn[],
+  forecast: ForecastItem[],
+  banks: BankAccount[],
+  today: Date,
+  fmt: (n: number) => string,
+  lowBalanceThreshold = 500_000,
+): Insight[] {
+  const out: Insight[] = [];
+  const todayISO = toISODate(today);
+
+  // 1) cash momentum (last 30d net vs prior 30d)
+  const m = momentum(txns, today, 30);
+  if (m.netPct != null && Number.isFinite(m.netPct) && Math.abs(m.netPct) >= 0.5) {
+    const up = m.netPct >= 0;
+    out.push({ id: "momentum", icon: "trend", tone: up ? "up" : "down", text: `Net cash ${up ? "up" : "down"} ${Math.abs(m.netPct).toFixed(1)}% vs the previous 30 days.` });
+  }
+
+  // 2) next payroll (from forecast)
+  const nextPayroll = forecast
+    .filter((f) => f.source === "payroll" && f.date >= todayISO)
+    .sort((a, b) => a.date.localeCompare(b.date))[0];
+  if (nextPayroll) {
+    const days = Math.max(0, Math.round((new Date(nextPayroll.date).getTime() - today.getTime()) / 86_400_000));
+    out.push({ id: "payroll", icon: "users", tone: "warn", text: `Payroll due in ${days} day${days === 1 ? "" : "s"} — ${fmt(nextPayroll.amount)}.` });
+  }
+
+  // 3) largest payment in the last 30 days
+  const cutoff = toISODate(addDays(today, -30));
+  const largest = txns.filter((t) => t.cashOut > 0 && t.date > cutoff).sort((a, b) => b.cashOut - a.cashOut)[0];
+  if (largest) out.push({ id: "largest", icon: "upload", tone: "info", text: `Largest recent payment: ${fmt(largest.cashOut)} — ${largest.description}.` });
+
+  // 4) next expected receipt (from forecast)
+  const nextReceipt = forecast
+    .filter((f) => f.direction === "in" && f.date >= todayISO)
+    .sort((a, b) => a.date.localeCompare(b.date))[0];
+  if (nextReceipt) out.push({ id: "receipt", icon: "download", tone: "up", text: `Next expected receipt ${formatDate(nextReceipt.date)}: ${fmt(nextReceipt.amount)}.` });
+
+  // 5) low-balance account
+  const balances = cashByBank(banks, txns);
+  const low = balances.filter((b) => b.value < lowBalanceThreshold).sort((a, b) => a.value - b.value)[0];
+  if (low) out.push({ id: "lowcash", icon: "bell", tone: "warn", text: `Low cash alert: ${low.name} at ${fmt(low.value)}.` });
+
+  return out;
+}
+
+// ── Forecast timeline (upcoming events, grouped by day) ───────────────────────
+
+export interface UpcomingEvent {
+  date: string;
+  dateLabel: string;
+  in: number;
+  out: number;
+  items: { label: string; direction: "in" | "out"; amount: number; reference: string | null }[];
+}
+
+export function upcomingEvents(items: ForecastItem[], days: number, today: Date): UpcomingEvent[] {
+  const start = toISODate(today);
+  const end = toISODate(addDays(today, days));
+  const byDay = new Map<string, UpcomingEvent>();
+  for (const it of items) {
+    if (it.date < start || it.date > end) continue;
+    const e = byDay.get(it.date) ?? { date: it.date, dateLabel: formatDate(it.date), in: 0, out: 0, items: [] };
+    if (it.direction === "in") e.in += it.amount;
+    else e.out += it.amount;
+    e.items.push({ label: it.label, direction: it.direction, amount: it.amount, reference: it.reference });
+    byDay.set(it.date, e);
+  }
+  return [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 }

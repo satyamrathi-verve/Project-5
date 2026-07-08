@@ -19,12 +19,14 @@ import {
   TXN_STATUS_LABEL,
   TXN_STATUS_TONE,
   defaultColumnVisibility,
+  emailReport,
   exportCsv,
   exportXlsx,
   formatDate,
   pageCount,
   paginate,
   printReport,
+  shareLink,
   sortRows,
   txnTypeLabel,
   type CashFlowRow,
@@ -262,6 +264,8 @@ export function CashFlowTable({
   const exportBtn = useRef<HTMLButtonElement>(null);
   const [colOpen, setColOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [colSearch, setColSearch] = useState("");
+  const [shareNote, setShareNote] = useState(false);
 
   const visibleCols = useMemo(() => CASH_FLOW_COLUMNS.filter((c) => visibility[c.key]), [visibility]);
 
@@ -309,6 +313,28 @@ export function CashFlowTable({
   const exportCtx = () => ({ columns: visibleCols, rows: derived, title, subtitle, currency });
   const activeColFilters = FILTERABLE.filter((k) => colFilters[k] != null).length;
 
+  // totals across the full filtered set (drives the always-visible summary bar)
+  const totals = useMemo(() => {
+    let ci = 0;
+    let co = 0;
+    for (const r of derived) {
+      ci += r.cashIn || 0;
+      co += r.cashOut || 0;
+    }
+    return { ci, co, net: ci - co };
+  }, [derived]);
+
+  const shownCols = useMemo(() => {
+    const q = colSearch.trim().toLowerCase();
+    return q ? CASH_FLOW_COLUMNS.filter((c) => c.label.toLowerCase().includes(q)) : CASH_FLOW_COLUMNS;
+  }, [colSearch]);
+  const setAll = (on: boolean) =>
+    setVisibility((v) => {
+      const next = { ...v };
+      for (const c of CASH_FLOW_COLUMNS) if (!c.locked) next[c.key] = on;
+      return next;
+    });
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       {/* toolbar */}
@@ -329,25 +355,43 @@ export function CashFlowTable({
           >
             <Icon name="grid" size={16} /> Columns
           </button>
-          <Popover open={colOpen} anchorRef={colBtn} onClose={() => setColOpen(false)} width={220}>
-            <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Show columns</p>
-            {CASH_FLOW_COLUMNS.map((c) => (
-              <label
-                key={c.key}
-                className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
-                  c.locked ? "opacity-50" : "cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
-                } text-slate-700 dark:text-slate-200`}
-              >
-                <input
-                  type="checkbox"
-                  disabled={c.locked}
-                  checked={visibility[c.key]}
-                  onChange={(e) => setVisibility((v) => ({ ...v, [c.key]: e.target.checked }))}
-                  className="h-3.5 w-3.5 rounded border-slate-300"
-                />
-                {c.label}
-              </label>
-            ))}
+          <Popover open={colOpen} anchorRef={colBtn} onClose={() => setColOpen(false)} width={240} padded={false}>
+            <div className="flex items-center justify-between gap-1 border-b border-slate-100 px-2 py-1.5 dark:border-slate-700">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Columns</span>
+              <div className="flex gap-1 text-[11px]">
+                <button onClick={() => setAll(true)} className="rounded px-1.5 py-0.5 font-medium text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Show all</button>
+                <button onClick={() => setAll(false)} className="rounded px-1.5 py-0.5 font-medium text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Hide all</button>
+                <button onClick={() => setVisibility(defaultColumnVisibility())} className="rounded px-1.5 py-0.5 font-medium text-brand hover:bg-brand/10 dark:text-brand-light">Reset</button>
+              </div>
+            </div>
+            <div className="p-1.5">
+              <input
+                value={colSearch}
+                onChange={(e) => setColSearch(e.target.value)}
+                placeholder="Search columns…"
+                className={`${inputClass} w-full py-1.5 text-xs`}
+              />
+            </div>
+            <div className="max-h-64 overflow-y-auto px-1.5 pb-1.5">
+              {shownCols.map((c) => (
+                <label
+                  key={c.key}
+                  className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
+                    c.locked ? "opacity-50" : "cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
+                  } text-slate-700 dark:text-slate-200`}
+                >
+                  <input
+                    type="checkbox"
+                    disabled={c.locked}
+                    checked={visibility[c.key]}
+                    onChange={(e) => setVisibility((v) => ({ ...v, [c.key]: e.target.checked }))}
+                    className="h-3.5 w-3.5 rounded border-slate-300"
+                  />
+                  {c.label}
+                </label>
+              ))}
+              {shownCols.length === 0 && <p className="px-2 py-3 text-center text-xs text-slate-400">No columns match</p>}
+            </div>
           </Popover>
 
           <button
@@ -358,12 +402,14 @@ export function CashFlowTable({
           >
             <Icon name="download" size={16} /> Export
           </button>
-          <Popover open={exportOpen} anchorRef={exportBtn} onClose={() => setExportOpen(false)} width={180}>
+          <Popover open={exportOpen} anchorRef={exportBtn} onClose={() => setExportOpen(false)} width={190}>
             {([
-              ["Excel (.xlsx)", () => void exportXlsx(exportCtx(), "cash-flow.xlsx")],
-              ["CSV (.csv)", () => exportCsv(exportCtx(), "cash-flow.csv")],
-              ["PDF / Print", () => printReport(exportCtx())],
-            ] as const).map(([label, fn]) => (
+              ["Excel (.xlsx)", "download", () => void exportXlsx(exportCtx(), "cash-flow.xlsx")],
+              ["CSV (.csv)", "file", () => exportCsv(exportCtx(), "cash-flow.csv")],
+              ["PDF / Print", "scroll", () => printReport(exportCtx())],
+              ["Email", "mail", () => emailReport(exportCtx())],
+              ["Share Link", "link", () => void shareLink().then((ok) => { if (ok) { setShareNote(true); setTimeout(() => setShareNote(false), 2500); } })],
+            ] as const).map(([label, icon, fn]) => (
               <button
                 key={label}
                 onClick={() => {
@@ -372,7 +418,7 @@ export function CashFlowTable({
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
               >
-                <Icon name="download" size={15} />
+                <Icon name={icon} size={15} />
                 {label}
               </button>
             ))}
@@ -433,6 +479,22 @@ export function CashFlowTable({
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* always-visible summary footer (#15) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 bg-slate-50/70 px-4 py-2.5 dark:border-slate-800 dark:bg-slate-800/30">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+          <span className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Cash In <Money amount={totals.ci} currency={currency} tone="in" className="ml-1 text-sm font-semibold" />
+          </span>
+          <span className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Cash Out <Money amount={totals.co} currency={currency} tone="out" className="ml-1 text-sm font-semibold" />
+          </span>
+          <span className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Net <Money amount={totals.net} currency={currency} tone="auto" className="ml-1 text-sm font-semibold" />
+          </span>
+        </div>
+        {shareNote && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">✓ Link copied to clipboard</span>}
       </div>
 
       {/* pagination */}
@@ -516,6 +578,10 @@ function Cell({
       );
     case "bankAccount":
       return <td className={`${cls} whitespace-nowrap text-slate-600 dark:text-slate-300`}>{row.bankAccountName ?? <span className="text-slate-400">—</span>}</td>;
+    case "department":
+      return <td className={`${cls} whitespace-nowrap text-slate-600 dark:text-slate-300`}>{row.department ?? <span className="text-slate-300 dark:text-slate-600">—</span>}</td>;
+    case "project":
+      return <td className={`${cls} whitespace-nowrap text-slate-600 dark:text-slate-300`}>{row.project ?? <span className="text-slate-300 dark:text-slate-600">—</span>}</td>;
     case "cashIn":
       return (
         <td className={cls}>

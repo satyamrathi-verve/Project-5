@@ -20,8 +20,12 @@ import { supabase, isConfigured } from "@/lib/supabase";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { Icon } from "@/components/icons";
+import { formatMoney } from "@/lib/balances";
 import {
   applyFilters,
+  buildInsights,
+  cashByBank,
+  cashByCategory,
   categoryTotals,
   computeKpis,
   dailySeries,
@@ -29,11 +33,13 @@ import {
   forecastPoints,
   forecastTotals,
   loadCashFlowData,
+  momentum,
   monthlySeries,
   openingCash,
   parseISO,
   resolveRange,
   runningBalanceSeries,
+  upcomingEvents,
   withRunningBalance,
   CASHFLOW_DEMO,
   demoDefaultRange,
@@ -130,7 +136,17 @@ export default function CashFlowPage() {
     [data, horizonDays, today, kpis.closing],
   );
   const fTotals = useMemo(() => forecastTotals(data?.forecast ?? [], horizonDays, today), [data, horizonDays, today]);
+  const fEvents = useMemo(() => upcomingEvents(data?.forecast ?? [], horizonDays, today), [data, horizonDays, today]);
   const categories = useMemo(() => categoryTotals(filteredTxns), [filteredTxns]);
+
+  // dashboard intelligence: trend, composition breakdowns, insights
+  const mom = useMemo(() => momentum(allTxns, today, 30), [allTxns, today]);
+  const byCategory = useMemo(() => cashByCategory(filteredTxns, "out"), [filteredTxns]);
+  const byBank = useMemo(() => cashByBank(data?.bankAccounts ?? [], filteredTxns), [data, filteredTxns]);
+  const insights = useMemo(
+    () => buildInsights(filteredTxns, data?.forecast ?? [], data?.bankAccounts ?? [], today, (n) => formatMoney(n, currency)),
+    [filteredTxns, data, today, currency],
+  );
 
   const departments = useMemo(() => facetValues(allTxns, (t) => t.department), [allTxns]);
   const locations = useMemo(() => facetValues(allTxns, (t) => t.location), [allTxns]);
@@ -243,7 +259,18 @@ export default function CashFlowPage() {
         <>
           {view === "dashboard" && (
             <>
-              <DashboardView kpis={kpis} inOut={inOut} monthly={monthly} balance={balance} forecast={fPoints} />
+              <DashboardView
+                kpis={kpis}
+                momentum={mom}
+                inOut={inOut}
+                monthly={monthly}
+                balance={balance}
+                forecast={fPoints}
+                byCategory={byCategory}
+                byBank={byBank}
+                insights={insights}
+                onNavigate={setView}
+              />
               <CashFlowTable rows={tableRows} currency={currency} onDrill={setDrill} />
             </>
           )}
@@ -285,6 +312,7 @@ export default function CashFlowPage() {
             <ForecastView
               items={data?.forecast ?? []}
               points={fPoints}
+              events={fEvents}
               horizonDays={horizonDays}
               onHorizon={setHorizonDays}
               expectedIn={fTotals.expectedIn}

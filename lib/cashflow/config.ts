@@ -155,6 +155,8 @@ export type ColumnKey =
   | "description"
   | "glAccount"
   | "bankAccount"
+  | "department"
+  | "project"
   | "cashIn"
   | "cashOut"
   | "runningBalance"
@@ -180,6 +182,8 @@ export const CASH_FLOW_COLUMNS: ColumnDef[] = [
   { key: "description", label: "Description", align: "left", default: true },
   { key: "glAccount", label: "GL Account", align: "left", default: true },
   { key: "bankAccount", label: "Bank Account", align: "left", default: true },
+  { key: "department", label: "Department", align: "left", default: false },
+  { key: "project", label: "Project", align: "left", default: false },
   { key: "cashIn", label: "Cash In", align: "right", numeric: true, default: true },
   { key: "cashOut", label: "Cash Out", align: "right", numeric: true, default: true },
   { key: "runningBalance", label: "Running Balance", align: "right", numeric: true, default: true },

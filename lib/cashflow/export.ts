@@ -33,6 +33,10 @@ function cellValue(row: CashFlowRow, key: ColumnKey): string | number {
       return row.glAccountCode ? `${row.glAccountCode} · ${row.glAccountName ?? ""}`.trim() : row.glAccountName ?? "";
     case "bankAccount":
       return row.bankAccountName ?? "";
+    case "department":
+      return row.department ?? "";
+    case "project":
+      return row.project ?? "";
     case "cashIn":
       return row.cashIn || 0;
     case "cashOut":
@@ -111,6 +115,31 @@ export async function exportXlsx(ctx: ExportContext, filename: string): Promise<
 
   const buffer = await wb.xlsx.writeBuffer();
   downloadBlob(new Blob([buffer], { type: XLSX_MIME }), filename);
+}
+
+/** Open the user's mail client pre-filled with a summary of the current view. */
+export function emailReport(ctx: ExportContext): void {
+  const totalIn = ctx.rows.reduce((s, r) => s + (r.cashIn || 0), 0);
+  const totalOut = ctx.rows.reduce((s, r) => s + (r.cashOut || 0), 0);
+  const subject = encodeURIComponent(ctx.title);
+  const body = encodeURIComponent(
+    `${ctx.subtitle ? ctx.subtitle + "\n\n" : ""}${ctx.rows.length} transactions\n` +
+      `Cash In:  ${formatMoney(totalIn, ctx.currency)}\n` +
+      `Cash Out: ${formatMoney(totalOut, ctx.currency)}\n` +
+      `Net:      ${formatMoney(totalIn - totalOut, ctx.currency)}\n\n` +
+      `— Verve ERP · Cash Flow`,
+  );
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+}
+
+/** Copy a shareable link to this view to the clipboard. */
+export async function shareLink(): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(window.location.href);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Open a styled print window (user chooses Print or Save as PDF). */
