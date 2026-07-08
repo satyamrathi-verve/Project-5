@@ -29,6 +29,10 @@ const BLANK_LABEL = "(Blanks)";
   Excel-style out of the box: click a header to sort (the ⇅ badge is always
   visible), click the funnel for a checkbox list of that column's values — and
   each list only offers values still possible under the other columns' filters.
+
+  Row selection is opt-in: pass `selectable` plus `selectedIds`/`onSelectionChange`
+  to get a leading checkbox column (used by Customer Master's multi-delete). Screens
+  that don't pass it get no checkbox column, so nothing else changes.
 */
 export function DataTable<T extends { id: string }>({
   columns,
@@ -36,6 +40,9 @@ export function DataTable<T extends { id: string }>({
   empty = "Nothing here yet.",
   rowClassName,
   onRowClick,
+  selectable = false,
+  selectedIds = [],
+  onSelectionChange,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -44,6 +51,12 @@ export function DataTable<T extends { id: string }>({
   rowClassName?: (row: T) => string;
   /** Optional whole-row click (e.g. open a preview). Interactive cells should stopPropagation. */
   onRowClick?: (row: T) => void;
+  /** Show a leading checkbox column for multi-select. */
+  selectable?: boolean;
+  /** Currently selected row ids (controlled by the parent). */
+  selectedIds?: string[];
+  /** Called with the new selection whenever a checkbox is toggled. */
+  onSelectionChange?: (ids: string[]) => void;
 }) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
   // key -> set of selected values; a missing key means "no filter" (everything shown)
@@ -112,11 +125,48 @@ export function DataTable<T extends { id: string }>({
 
   const anyFilterActive = Object.values(filters).some(Boolean);
 
+  // Selection works over the currently visible (filtered/sorted) rows.
+  const visibleIds = visible.map((r) => r.id);
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  const someSelected = visibleIds.some((id) => selectedIds.includes(id));
+
+  function toggleRow(id: string) {
+    if (!onSelectionChange) return;
+    onSelectionChange(
+      selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id]
+    );
+  }
+
+  function toggleAll() {
+    if (!onSelectionChange) return;
+    onSelectionChange(
+      allSelected
+        ? selectedIds.filter((id) => !visibleIds.includes(id))
+        : Array.from(new Set([...selectedIds, ...visibleIds]))
+    );
+  }
+
+  const totalCols = columns.length + (selectable ? 1 : 0);
+
   return (
     <div className="overflow-visible rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50 text-left dark:border-slate-800 dark:bg-slate-800/50">
+            {selectable && (
+              <th className="w-10 px-4 py-3">
+                <input
+                  type="checkbox"
+                  aria-label="Select all"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !allSelected && someSelected;
+                  }}
+                  onChange={toggleAll}
+                  className="h-4 w-4 accent-brand"
+                />
+              </th>
+            )}
             {columns.map((c) => {
               const interactive = c.sortable !== false && c.header !== "";
               if (!interactive) {
@@ -239,7 +289,7 @@ export function DataTable<T extends { id: string }>({
         <tbody>
           {visible.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-10 text-center text-slate-400 dark:text-slate-500">
+              <td colSpan={totalCols} className="px-4 py-10 text-center text-slate-400 dark:text-slate-500">
                 {anyFilterActive ? "Nothing matches these filters." : empty}
               </td>
             </tr>
@@ -250,8 +300,19 @@ export function DataTable<T extends { id: string }>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50 ${
                   onRowClick ? "cursor-pointer" : ""
-                } ${rowClassName?.(row) ?? ""}`}
+                } ${selectedIds.includes(row.id) ? "bg-brand/5" : ""} ${rowClassName?.(row) ?? ""}`}
               >
+                {selectable && (
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label="Select row"
+                      checked={selectedIds.includes(row.id)}
+                      onChange={() => toggleRow(row.id)}
+                      className="h-4 w-4 accent-brand"
+                    />
+                  </td>
+                )}
                 {columns.map((c) => (
                   <td key={c.key} className={`px-4 py-3 text-slate-700 dark:text-slate-300 ${c.className ?? ""}`}>
                     {c.render ? c.render(row) : String((row as Record<string, unknown>)[c.key] ?? "")}

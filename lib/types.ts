@@ -26,6 +26,12 @@ export interface Customer {
   credit_days: number;
   opening_balance: number;
   created_at: string;
+  // Optional columns: present only after the extras migration is run (see the
+  // ALTER TABLE in customers/page.tsx). Until then the page falls back to
+  // localStorage for these — see lib/customerMeta.ts.
+  secondary_phone?: string | null;
+  secondary_email?: string | null;
+  status?: string | null;
 }
 
 export interface GLAccount {
