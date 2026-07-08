@@ -35,12 +35,15 @@ export function DataTable<T extends { id: string }>({
   rows,
   empty = "Nothing here yet.",
   rowClassName,
+  onRowClick,
 }: {
   columns: Column<T>[];
   rows: T[];
   empty?: string;
   /** Optional per-row classes (e.g. ageing severity tint). Applied on top of the base row styles. */
   rowClassName?: (row: T) => string;
+  /** Optional whole-row click (e.g. open a preview). Interactive cells should stopPropagation. */
+  onRowClick?: (row: T) => void;
 }) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
   // key -> set of selected values; a missing key means "no filter" (everything shown)
@@ -244,9 +247,10 @@ export function DataTable<T extends { id: string }>({
             visible.map((row) => (
               <tr
                 key={row.id}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50 ${
-                  rowClassName?.(row) ?? ""
-                }`}
+                  onRowClick ? "cursor-pointer" : ""
+                } ${rowClassName?.(row) ?? ""}`}
               >
                 {columns.map((c) => (
                   <td key={c.key} className={`px-4 py-3 text-slate-700 dark:text-slate-300 ${c.className ?? ""}`}>

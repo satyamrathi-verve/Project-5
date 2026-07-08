@@ -52,7 +52,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
+    <div className="flex h-screen overflow-hidden bg-slate-50 print:h-auto print:overflow-visible print:bg-white dark:bg-slate-950">
       <Sidebar
         collapsed={collapsed}
         onToggleCollapse={toggleCollapse}
@@ -61,7 +61,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader theme={theme} onToggleTheme={toggleTheme} onOpenMobile={() => setMobileOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 print:overflow-visible print:p-0 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

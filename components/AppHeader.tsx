@@ -74,7 +74,7 @@ export function AppHeader({
   const toggle = (id: MenuId) => setMenu((m) => (m === id ? null : id));
 
   return (
-    <header ref={headerRef} className="sticky top-0 z-30 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80 sm:px-5">
+    <header ref={headerRef} className="sticky top-0 z-30 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md print:hidden dark:border-slate-800 dark:bg-slate-900/80 sm:px-5">
       {/* mobile menu */}
       <button
         type="button"
