@@ -46,6 +46,17 @@ export const TEMPLATE_GROUPS = [
   "Other Expenses",
 ];
 
+/** Excel cell-comment guidance shown on each column header (Option A). */
+const HEADER_NOTES: Record<string, string> = {
+  "Account Code": "Unique numeric GL code.\nExample format: 1000, 1010, 2000.",
+  "Account Name": "Enter a unique General Ledger account name.",
+  "Account Type": "Allowed values:\nAsset\nLiability\nEquity\nRevenue\nExpense\nOther Income\nOther Expense",
+  "Parent Group": "Enter an existing parent group.\nExample:\nCurrent Assets\nFixed Assets\nRevenue\nOperating Expenses",
+  "Normal Balance": "Allowed values:\nDebit\nCredit",
+  Status: "Allowed values:\nActive\nInactive",
+  Description: "Optional description for this account.",
+};
+
 const BRAND_ARGB = "FF4F46E5"; // indigo-600
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -53,8 +64,13 @@ function csvEscape(s: string): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-/** CSV version of the template (headers + sample rows). */
+/** CSV template — header row ONLY. No sample records, so nothing can be imported by accident. */
 export function csvTemplate(): string {
+  return (TEMPLATE_HEADERS as readonly string[]).map(csvEscape).join(",");
+}
+
+/** A demo CSV (headers + example rows) for the "Load Sample" preview only — never downloaded as the template. */
+export function sampleCsv(): string {
   return [TEMPLATE_HEADERS as readonly string[], ...TEMPLATE_SAMPLE].map((row) => row.map(csvEscape).join(",")).join("\r\n");
 }
 
@@ -94,9 +110,17 @@ export async function xlsxTemplate(): Promise<Blob> {
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: BRAND_ARGB } };
     cell.alignment = { vertical: "middle", horizontal: "left" };
     cell.border = { bottom: { style: "thin", color: { argb: "FFCBD5E1" } } };
+    // Guidance as an Excel cell comment on each header (Option A).
+    const note = HEADER_NOTES[String(cell.value ?? "")];
+    if (note) {
+      cell.note = {
+        texts: [{ text: note }],
+        margins: { insetmode: "custom", inset: [0.13, 0.13, 0.25, 0.25] },
+      };
+    }
   });
 
-  TEMPLATE_SAMPLE.forEach((r) => ws.addRow(r));
+  // No sample records — the Accounts sheet ships with headers only (production-safe).
 
   // dropdown data-validation for a generous range of rows
   const list = (items: string[]) => [`"${items.join(",")}"`];

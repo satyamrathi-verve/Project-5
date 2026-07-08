@@ -10,11 +10,10 @@
 
   New in this pass (all presentation or per-browser UI state — no schema/API change):
     • Gradient summary cards with %-of-total share bars
-    • Floating filter toolbar (type, group, status, normal balance, favourites,
-      advanced code-range, density, columns, export, import, reset)
-    • Redesigned table: row multi-select + bulk actions, frozen first columns,
-      zebra + hover, density, status chips, type badges, clickable names, icon
-      actions + a per-row More menu (Duplicate / History / Delete)
+    • Floating toolbar (global search, flat/grouped view, columns, export, import, reset)
+    • Redesigned table: Excel-style per-column filters, row multi-select + bulk actions,
+      frozen first columns, zebra + hover, compact rows, status chips, type badges,
+      clickable names, icon actions + a per-row More menu (Duplicate / History / Delete)
     • Right-side drawer with tabs (General, Transactions, History, Attachments,
       Notes, Audit Trail, Relationships). General + Relationships are real; Notes is
       a functional per-browser overlay; the rest are honest gated empty states
@@ -52,7 +51,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
 import { AttachmentManager } from "@/components/AttachmentManager";
-import { csvTemplate, xlsxTemplate, fileToCsvText, downloadBlob } from "@/lib/import-template";
+import { csvTemplate, sampleCsv, xlsxTemplate, fileToCsvText, downloadBlob } from "@/lib/import-template";
 
 const PAGE_SIZES = [10, 25, 50, 100];
 const FAV_KEY = "gl.favorites";
@@ -71,7 +70,6 @@ const TYPE_ICON: Record<AccountType, IconName> = {
 type SortKey = "code" | "name" | "type" | "parent_group" | "balance";
 type ViewMode = "flat" | "grouped";
 type DrawerMode = "create" | "edit" | "view";
-type Density = "comfortable" | "compact";
 type StatusFilter = "all" | "active" | "inactive";
 type BalanceFilter = "all" | "debit" | "credit";
 type DrawerTab =
@@ -337,7 +335,6 @@ export default function GLMasterPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [view, setView] = useState<ViewMode>("flat");
-  const [density, setDensity] = useState<Density>("comfortable");
   const [cols, setCols] = useState({ type: true, group: true, balance: true, amount: true, status: true });
   const [colMenuOpen, setColMenuOpen] = useState(false);
 
@@ -840,7 +837,7 @@ export default function GLMasterPage() {
         </div>
       )}
 
-      {/* floating toolbar — global search + view/density/columns; per-column filters live in the table's filter row */}
+      {/* floating toolbar — global search + flat/grouped view + columns; per-column filters live in the header */}
       <div className="sticky top-0 z-20 mb-4 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-soft backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[14rem] flex-1">
@@ -867,20 +864,6 @@ export default function GLMasterPage() {
                   }`}
                 >
                   {m}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-700" title="Row density">
-              {([["comfortable", "Comfortable"], ["compact", "Compact"]] as const).map(([d, lbl]) => (
-                <button
-                  key={d}
-                  onClick={() => setDensity(d)}
-                  className={`rounded-md px-2 py-1 text-xs font-medium ${
-                    density === d ? "bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900" : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700"
-                  }`}
-                >
-                  {lbl}
                 </button>
               ))}
             </div>
@@ -969,7 +952,6 @@ export default function GLMasterPage() {
         <FlatTable
           rows={pageRows}
           cols={cols}
-          density={density}
           balances={balances}
           currency={currency}
           colFilters={colFilters}
@@ -997,7 +979,6 @@ export default function GLMasterPage() {
       ) : (
         <GroupedView
           tree={tree}
-          density={density}
           balances={balances}
           currency={currency}
           favorites={favorites}
@@ -1411,7 +1392,6 @@ function ExcelFilter({
 function FlatTable({
   rows,
   cols,
-  density,
   balances,
   currency,
   colFilters,
@@ -1438,7 +1418,6 @@ function FlatTable({
 }: {
   rows: GLAccount[];
   cols: { type: boolean; group: boolean; balance: boolean; amount: boolean; status: boolean };
-  density: Density;
   balances: Record<string, number>;
   currency: string;
   colFilters: ColumnFilters;
@@ -1464,7 +1443,7 @@ function FlatTable({
   empty: string;
 }) {
   const stop = (e: React.MouseEvent) => e.stopPropagation();
-  const py = density === "compact" ? "py-1.5" : "py-3";
+  const py = "py-1.5"; // compact density (permanent)
   const colCount =
     4 + (cols.type ? 1 : 0) + (cols.group ? 1 : 0) + (cols.balance ? 1 : 0) + (cols.amount ? 1 : 0) + (cols.status ? 1 : 0);
   const pageIds = rows.map((r) => r.id);
@@ -1679,7 +1658,6 @@ function FlatTable({
 
 function GroupedView({
   tree,
-  density,
   balances,
   currency,
   favorites,
@@ -1691,7 +1669,6 @@ function GroupedView({
   onQuickAdd,
 }: {
   tree: ReturnType<typeof buildTree>;
-  density: Density;
   balances: Record<string, number>;
   currency: string;
   favorites: Set<string>;
@@ -1705,7 +1682,7 @@ function GroupedView({
   const [collapsedTypes, setCollapsedTypes] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const stop = (e: React.MouseEvent) => e.stopPropagation();
-  const py = density === "compact" ? "py-1.5" : "py-2.5";
+  const py = "py-1.5"; // compact density (permanent)
 
   const toggleType = (t: string) =>
     setCollapsedTypes((prev) => {
@@ -2421,7 +2398,7 @@ function ImportModal({
   const [parsed, setParsed] = useState<ParsedImportRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const sample = csvTemplate();
+  const sample = sampleCsv(); // "Load Sample" demo rows (the downloadable template is headers-only)
 
   const runParse = (raw: string) => {
     setText(raw);
