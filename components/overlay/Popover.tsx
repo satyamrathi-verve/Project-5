@@ -38,8 +38,15 @@ export function Popover({
     <div
       ref={ref}
       role="menu"
-      style={{ position: "fixed", top: pos?.top ?? -9999, left: pos?.left ?? -9999, width, zIndex: Z[layer] }}
-      className={`overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${
+      style={{
+        position: "fixed",
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        width,
+        maxHeight: pos?.maxHeight,
+        zIndex: Z[layer],
+      }}
+      className={`overflow-y-auto overflow-x-hidden overscroll-contain rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${
         padded ? "p-2" : ""
       }`}
     >

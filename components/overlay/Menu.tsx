@@ -68,8 +68,15 @@ export function Menu({
       ref={ref}
       role="menu"
       aria-orientation="vertical"
-      style={{ position: "fixed", top: pos?.top ?? -9999, left: pos?.left ?? -9999, width, zIndex: Z[layer] }}
-      className="overflow-hidden rounded-[10px] border border-slate-200 bg-white p-1 shadow-[0_12px_44px_-8px_rgba(15,23,42,0.4)] animate-scale-in dark:border-slate-700 dark:bg-slate-800"
+      style={{
+        position: "fixed",
+        top: pos?.top ?? -9999,
+        left: pos?.left ?? -9999,
+        width,
+        maxHeight: pos?.maxHeight,
+        zIndex: Z[layer],
+      }}
+      className="overflow-y-auto overflow-x-hidden overscroll-contain rounded-[10px] border border-slate-200 bg-white p-1 shadow-[0_12px_44px_-8px_rgba(15,23,42,0.4)] animate-scale-in dark:border-slate-700 dark:bg-slate-800"
     >
       {items.map((it, i) =>
         "separator" in it ? (
