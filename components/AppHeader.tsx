@@ -26,6 +26,19 @@ export function AppHeader({
   const [menu, setMenu] = useState<MenuId | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+
+  // Close any open dropdown on a click outside the header. (A fixed overlay div
+  // doesn't work here: the header's backdrop-blur makes it the containing block
+  // for fixed children, so an inset-0 layer only covers the header strip.)
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: PointerEvent) => {
+      if (headerRef.current && !headerRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [menu]);
 
   const allLinks = useMemo(() => NAV_SECTIONS.flatMap((s) => s.links), []);
   const results = useMemo(() => {
@@ -61,7 +74,7 @@ export function AppHeader({
   const toggle = (id: MenuId) => setMenu((m) => (m === id ? null : id));
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80 sm:px-5">
+    <header ref={headerRef} className="sticky top-0 z-30 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80 sm:px-5">
       {/* mobile menu */}
       <button
         type="button"
@@ -186,8 +199,6 @@ export function AppHeader({
 
       </div>
 
-      {/* click-away layer */}
-      {menu && <div className="fixed inset-0 z-20" onClick={() => setMenu(null)} aria-hidden="true" />}
     </header>
   );
 }
