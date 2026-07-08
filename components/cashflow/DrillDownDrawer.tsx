@@ -14,6 +14,7 @@ import { useState } from "react";
 import { Icon } from "@/components/icons";
 import { formatMoney } from "@/lib/balances";
 import { TXN_STATUS_LABEL, TXN_STATUS_TONE, categoryLabel, formatDate, txnTypeLabel, type CashFlowRow } from "@/lib/cashflow";
+import { AttachmentManager } from "@/components/AttachmentManager";
 import { EmptyState, Money } from "./ui";
 
 type Tab = "source" | "gl" | "journal" | "attachments" | "audit";
@@ -148,9 +149,7 @@ export function DrillDownDrawer({ row, currency, onClose }: { row: CashFlowRow; 
               message="When posted transactions write balanced journal lines, the originating entry will be linked here."
             />
           )}
-          {tab === "attachments" && (
-            <EmptyState icon="folder" title="No attachments" message="Supporting documents (receipts, advices, cheque scans) attach here per transaction." />
-          )}
+          {tab === "attachments" && <AttachmentManager module="cashflow" recordId={row.documentNo} />}
           {tab === "audit" && (
             <EmptyState icon="clock" title="No audit trail yet" message="Create / post / edit / reverse events are recorded here once transaction workflows exist." />
           )}

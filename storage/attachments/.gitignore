@@ -1,0 +1,5 @@
+# Runtime-uploaded documents + manifests live here. They are real files written
+# by the app's Document Management System into the application storage directory
+# (NOT the database). Never commit uploaded content — only keep the folder.
+*
+!.gitignore

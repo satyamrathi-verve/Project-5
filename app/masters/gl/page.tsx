@@ -2110,7 +2110,7 @@ function AccountDrawer({
               {tab === "history" && (
                 <GatedTab icon="clock" title="No change history" body="Field-level change history needs a history/versioning table, which the fixed schema doesn't include yet." />
               )}
-              {tab === "attachments" && <AttachmentManager entityType="gl_account" entityId={account.id} />}
+              {tab === "attachments" && <AttachmentManager module="gl" recordId={account.code} />}
               {tab === "audit" && (
                 <GatedTab icon="scroll" title="No audit trail" body="Who-changed-what auditing needs an audit_log table and user identities, which aren't part of the current backend." />
               )}
