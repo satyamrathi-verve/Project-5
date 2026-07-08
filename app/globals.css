@@ -45,3 +45,28 @@ body {
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/*
+  Print: strip the app chrome (sidebar + top header) so printed / "Save as PDF"
+  documents show only the page content — e.g. a clean invoice letterhead.
+  Additive and app-wide: any screen with a Print button benefits.
+*/
+@media print {
+  aside,
+  header {
+    display: none !important;
+  }
+  main {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  html,
+  body {
+    background: #fff !important;
+  }
+  /* Force accurate colours on paper (letterhead band, table header). */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
