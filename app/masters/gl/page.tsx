@@ -38,6 +38,7 @@ import {
   parseImport,
   type ParsedImportRow,
   suggestNextCode,
+  suggestSubCode,
   toCSV,
   typeMeta,
   typeLabel,
@@ -84,7 +85,7 @@ type DrawerTab =
 interface DrawerState {
   mode: DrawerMode;
   account: GLAccount | null;
-  preset?: { type: AccountType; group: string | null };
+  preset?: { type: AccountType; group: string | null; parent?: GLAccount };
   tab?: DrawerTab;
 }
 
@@ -690,6 +691,11 @@ export default function GLMasterPage() {
     (type: AccountType, group: string | null) => setDrawer({ mode: "create", account: null, preset: { type, group } }),
     [],
   );
+  const openCreateSub = useCallback(
+    (parent: GLAccount) =>
+      setDrawer({ mode: "create", account: null, preset: { type: parent.type, group: parent.parent_group, parent } }),
+    [],
+  );
 
   // ---- keyboard shortcuts + quick-create deep link -------------------------
   useEffect(() => {
@@ -971,6 +977,7 @@ export default function GLMasterPage() {
           onToggleAll={toggleAllOnPage}
           onView={openView}
           onEdit={openEdit}
+          onCreateSub={openCreateSub}
           onDuplicate={openCopy}
           onHistory={(a) => openView(a, "history")}
           onDelete={(a) => askDelete([a.id], a.name)}
@@ -1148,19 +1155,42 @@ function SummaryCard({
   );
 }
 
-function RowMenu({ onDuplicate, onHistory, onDelete }: { onDuplicate: () => void; onHistory: () => void; onDelete: () => void }) {
+function RowMenu({
+  statusActive,
+  onView,
+  onEdit,
+  onCreateSub,
+  onDuplicate,
+  onSetStatus,
+  onHistory,
+  onDelete,
+}: {
+  statusActive: boolean;
+  onView: () => void;
+  onEdit: () => void;
+  onCreateSub: () => void;
+  onDuplicate: () => void;
+  onSetStatus: () => void;
+  onHistory: () => void;
+  onDelete: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const items: { icon: IconName; label: string; fn: () => void }[] = [
+    { icon: "eye", label: "View", fn: onView },
+    { icon: "pencil", label: "Edit", fn: onEdit },
+    { icon: "plus", label: "Create sub-account", fn: onCreateSub },
+    { icon: "copy", label: "Copy", fn: onDuplicate },
+    { icon: statusActive ? "close" : "check", label: statusActive ? "Set inactive" : "Set active", fn: onSetStatus },
+    { icon: "clock", label: "History", fn: onHistory },
+  ];
   return (
     <span className="relative">
       <IconAction name="dots" label="More actions" onClick={() => setOpen((v) => !v)} />
       {open && (
         <>
           <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <span className="absolute right-0 top-full z-40 mt-1 block w-40 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800">
-            {[
-              { icon: "copy" as IconName, label: "Duplicate", fn: onDuplicate },
-              { icon: "clock" as IconName, label: "History", fn: onHistory },
-            ].map((it) => (
+          <span className="absolute right-0 top-full z-40 mt-1 block w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800">
+            {items.map((it) => (
               <button
                 key={it.label}
                 onClick={() => {
@@ -1411,6 +1441,7 @@ function FlatTable({
   onToggleAll,
   onView,
   onEdit,
+  onCreateSub,
   onDuplicate,
   onHistory,
   onDelete,
@@ -1437,6 +1468,7 @@ function FlatTable({
   onToggleAll: (ids: string[], allSelected: boolean) => void;
   onView: (a: GLAccount) => void;
   onEdit: (a: GLAccount) => void;
+  onCreateSub: (a: GLAccount) => void;
   onDuplicate: (a: GLAccount) => void;
   onHistory: (a: GLAccount) => void;
   onDelete: (a: GLAccount) => void;
@@ -1635,10 +1667,17 @@ function FlatTable({
                       </td>
                     )}
                     <td className={`bg-inherit px-4 text-right ${py}`} onClick={stop}>
-                      <div className="flex items-center justify-end gap-0.5">
-                        <IconAction name="eye" label="View" onClick={() => onView(a)} />
-                        <IconAction name="pencil" label="Edit" onClick={() => onEdit(a)} />
-                        <RowMenu onDuplicate={() => onDuplicate(a)} onHistory={() => onHistory(a)} onDelete={() => onDelete(a)} />
+                      <div className="flex items-center justify-end">
+                        <RowMenu
+                          statusActive={!inactive.has(a.id)}
+                          onView={() => onView(a)}
+                          onEdit={() => onEdit(a)}
+                          onCreateSub={() => onCreateSub(a)}
+                          onDuplicate={() => onDuplicate(a)}
+                          onSetStatus={() => onRequestStatus(a)}
+                          onHistory={() => onHistory(a)}
+                          onDelete={() => onDelete(a)}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -1875,7 +1914,10 @@ function AccountDrawer({
       return { code: account.code, name: account.name, type: account.type, parent_group: account.parent_group };
     }
     if (mode === "create" && preset) {
-      return { code: suggestNextCode(preset.type, accounts), name: "", type: preset.type, parent_group: preset.group };
+      const code = preset.parent
+        ? suggestSubCode(preset.parent.code, preset.type, accounts)
+        : suggestNextCode(preset.type, accounts);
+      return { code, name: "", type: preset.type, parent_group: preset.group };
     }
     if (mode === "create" && account) {
       return { code: suggestNextCode(account.type, accounts), name: `${account.name} (copy)`, type: account.type, parent_group: account.parent_group };
@@ -1891,6 +1933,9 @@ function AccountDrawer({
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<DrawerTab>(state.tab ?? "general");
   const [note, setNote] = useState("");
+  // Parent account (convenience only — drives type/group/code inheritance; not stored).
+  const [parentInput, setParentInput] = useState(preset?.parent ? `${preset.parent.code} · ${preset.parent.name}` : "");
+  const parentLocked = !!preset?.parent;
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -1933,6 +1978,21 @@ function AccountDrawer({
     });
   };
 
+  // Picking a parent inherits its Type + Group and suggests a sub-account code.
+  const onParentChange = (val: string) => {
+    setParentInput(val);
+    const codeTok = val.split("·")[0].trim();
+    const p = accounts.find((a) => a.code === codeTok) ?? null;
+    if (p) {
+      setForm((f) => ({
+        ...f,
+        type: p.type,
+        parent_group: p.parent_group,
+        code: codeTouched ? f.code : suggestSubCode(p.code, p.type, accounts),
+      }));
+    }
+  };
+
   const save = async () => {
     if (!supabase) return;
     const result = validateAccount(form, accounts, { excludeId: mode === "edit" ? account?.id : undefined, allowOverride: override });
@@ -1959,9 +2019,11 @@ function AccountDrawer({
   const meta = typeMeta(form.type);
   const title =
     mode === "create"
-      ? preset
-        ? `New account · ${preset.group ?? typeLabel(preset.type)}`
-        : "New account"
+      ? preset?.parent
+        ? `New sub-account · under ${preset.parent.code}`
+        : preset
+          ? `New account · ${preset.group ?? typeLabel(preset.type)}`
+          : "New account"
       : mode === "edit"
         ? "Edit account"
         : account?.name ?? "Account";
@@ -2100,8 +2162,36 @@ function AccountDrawer({
             </>
           ) : (
             <div className="space-y-4">
+              {mode === "create" && (
+                <FormField label="Parent account (optional)">
+                  <input
+                    list="gl-parents"
+                    value={parentInput}
+                    onChange={(e) => onParentChange(e.target.value)}
+                    disabled={parentLocked}
+                    className={`${inputClass} ${parentLocked ? "cursor-not-allowed opacity-70" : ""}`}
+                    placeholder="Search accounts…  (blank = top-level)"
+                  />
+                  <datalist id="gl-parents">
+                    {accounts.map((a) => (
+                      <option key={a.id} value={`${a.code} · ${a.name}`} />
+                    ))}
+                  </datalist>
+                  <span className="mt-1 text-[11px] text-slate-400">
+                    {parentLocked
+                      ? "Creating a sub-account — type is inherited from the parent and locked."
+                      : "Pick a parent to inherit its type + group and suggest a sub-code. Blank = top-level."}
+                  </span>
+                </FormField>
+              )}
+
               <FormField label="Account type">
-                <select value={form.type} onChange={(e) => onTypeChange(e.target.value as AccountType)} className={inputClass}>
+                <select
+                  value={form.type}
+                  onChange={(e) => onTypeChange(e.target.value as AccountType)}
+                  disabled={parentLocked}
+                  className={`${inputClass} ${parentLocked ? "cursor-not-allowed opacity-70" : ""}`}
+                >
                   {ACCOUNT_TYPES.map((t) => (
                     <option key={t.type} value={t.type}>
                       {t.label}

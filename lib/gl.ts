@@ -198,6 +198,23 @@ export function suggestNextCode(type: AccountType, accounts: GLAccount[]): strin
   return String(next);
 }
 
+/**
+ * Suggest the next free "sub-account" code beneath a parent — the first unused
+ * code numerically after the parent that still sits in the type's band
+ * (e.g. 1000 → 1001, 5000 → 5001). Falls back to the type's normal suggestion.
+ */
+export function suggestSubCode(parentCode: string, type: AccountType, accounts: GLAccount[]): string {
+  const base = Number(parentCode);
+  if (!Number.isNaN(base)) {
+    const used = new Set(accounts.map((a) => a.code));
+    for (let n = base + 1; n <= base + 999; n += 1) {
+      const c = String(n);
+      if (!used.has(c) && codeInBand(c, type)) return c;
+    }
+  }
+  return suggestNextCode(type, accounts);
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
