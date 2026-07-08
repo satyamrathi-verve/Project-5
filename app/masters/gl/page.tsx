@@ -52,6 +52,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
 import { AttachmentManager } from "@/components/AttachmentManager";
+import { csvTemplate, xlsxTemplate, fileToCsvText, downloadBlob } from "@/lib/import-template";
 
 const PAGE_SIZES = [10, 25, 50, 100];
 const FAV_KEY = "gl.favorites";
@@ -2419,18 +2420,32 @@ function ImportModal({
   const [text, setText] = useState("");
   const [parsed, setParsed] = useState<ParsedImportRow[] | null>(null);
   const [busy, setBusy] = useState(false);
-  const sample = "code,name,type,parent_group\n1300,Prepaid Rent,asset,Current Assets\n6400,Rent,expense,Operating Expenses";
+  const [downloading, setDownloading] = useState(false);
+  const sample = csvTemplate();
 
   const runParse = (raw: string) => {
     setText(raw);
     setParsed(raw.trim() ? parseImport(raw, accounts) : null);
   };
-  const onFile = (file?: File) => {
+  const onFile = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => runParse(String(reader.result ?? ""));
-    reader.readAsText(file);
+    try {
+      runParse(await fileToCsvText(file));
+    } catch {
+      onError("Couldn't read that file. Use the template's .xlsx or .csv.");
+    }
   };
+  const downloadExcel = async () => {
+    setDownloading(true);
+    try {
+      downloadBlob(await xlsxTemplate(), "verve-erp-gl-import-template.xlsx");
+    } catch {
+      onError("Couldn't generate the Excel template.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+  const downloadCsv = () => downloadBlob(new Blob([csvTemplate()], { type: "text/csv;charset=utf-8;" }), "verve-erp-gl-import-template.csv");
   const valid = parsed?.filter((r) => r.errors.length === 0) ?? [];
 
   const doImport = async () => {
@@ -2458,12 +2473,39 @@ function ImportModal({
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5">
           <p className="mb-2 text-sm text-slate-600 dark:text-slate-400">
-            Paste CSV with columns <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">code,name,type,parent_group</code> (header optional),
-            or upload a <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">.csv</code>. Every row is validated before anything is written.
+            Download the template, fill it in, then upload the <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">.xlsx</code> or{" "}
+            <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">.csv</code> (or paste rows below). Only{" "}
+            <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">Account Code, Name, Type, Parent Group</code> are imported — Normal Balance,
+            Status &amp; Description are reference-only. Every row is validated before anything is written.
           </p>
-          <div className="mb-3 flex items-center gap-2">
-            <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])} className="text-sm text-slate-600 dark:text-slate-400" />
-            <button onClick={() => runParse(sample)} className="text-xs text-brand hover:underline dark:text-brand-light">Load a sample</button>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <input
+              type="file"
+              accept=".csv,.xlsx,text/csv"
+              onChange={(e) => {
+                void onFile(e.target.files?.[0]);
+                e.currentTarget.value = "";
+              }}
+              className="text-sm text-slate-600 dark:text-slate-400"
+            />
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={downloadExcel}
+                disabled={downloading}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                <Icon name="download" size={13} /> {downloading ? "Preparing…" : "Download Excel Template"}
+              </button>
+              <button
+                onClick={downloadCsv}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                <Icon name="download" size={13} /> Download CSV Template
+              </button>
+              <button onClick={() => runParse(sample)} className="px-1 text-xs font-medium text-brand hover:underline dark:text-brand-light">
+                Load Sample
+              </button>
+            </div>
           </div>
           <textarea value={text} onChange={(e) => runParse(e.target.value)} rows={5} placeholder={sample} className={`${inputClass} w-full font-mono text-xs`} />
           {parsed && (

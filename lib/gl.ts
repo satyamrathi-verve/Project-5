@@ -372,6 +372,30 @@ export interface ParsedImportRow {
   raw: string[];
 }
 
+/** Friendly template headers → canonical columns (matched case-insensitively). */
+const HEADER_ALIASES: Record<"code" | "name" | "type" | "parent_group", string[]> = {
+  code: ["code", "account code", "gl code", "a/c code", "ac code"],
+  name: ["name", "account name", "gl name"],
+  type: ["type", "account type", "gl type"],
+  parent_group: ["parent_group", "parent group", "group", "sub group", "sub-group", "category"],
+};
+
+/** Normalise a display or stored account-type value to the DB enum, or null. */
+export function normalizeType(raw: string): AccountType | null {
+  const s = raw.trim().toLowerCase();
+  if (["asset", "assets"].includes(s)) return "asset";
+  if (["liability", "liabilities"].includes(s)) return "liability";
+  if (s === "equity") return "liability"; // equity is stored under the liability enum
+  if (["income", "revenue", "operating revenue", "direct income", "other income"].includes(s)) return "income";
+  if (
+    ["expense", "expenses", "operating expense", "operating expenses", "direct expense", "cost of goods sold", "cogs", "other expense", "other expenses"].includes(
+      s,
+    )
+  )
+    return "expense";
+  return null;
+}
+
 /**
  * Parse a pasted/uploaded CSV into validated draft rows for preview.
  * Accepts a header row (matched case-insensitively) or positional columns in
@@ -384,17 +408,21 @@ export function parseImport(text: string, existing: GLAccount[]): ParsedImportRo
 
   let startIdx = 0;
   const first = table[0].map((c) => c.trim().toLowerCase());
-  const looksLikeHeader = first.includes("code") && first.includes("name");
+  const findCol = (aliases: string[]) => first.findIndex((c) => aliases.includes(c));
   const colIndex: Record<string, number> = { code: 0, name: 1, type: 2, parent_group: 3 };
+  const codeIdx = findCol(HEADER_ALIASES.code);
+  const nameIdx = findCol(HEADER_ALIASES.name);
+  const looksLikeHeader = codeIdx >= 0 && nameIdx >= 0;
   if (looksLikeHeader) {
     startIdx = 1;
-    CSV_COLUMNS.forEach((col) => {
-      const idx = first.indexOf(col);
-      if (idx >= 0) colIndex[col] = idx;
-    });
+    colIndex.code = codeIdx;
+    colIndex.name = nameIdx;
+    const t = findCol(HEADER_ALIASES.type);
+    if (t >= 0) colIndex.type = t;
+    const g = findCol(HEADER_ALIASES.parent_group);
+    if (g >= 0) colIndex.parent_group = g;
   }
 
-  const validTypes = ACCOUNT_TYPES.map((t) => t.type) as string[];
   const running: GLAccount[] = [...existing];
   const out: ParsedImportRow[] = [];
 
@@ -402,13 +430,13 @@ export function parseImport(text: string, existing: GLAccount[]): ParsedImportRo
     const cells = table[r];
     const code = (cells[colIndex.code] ?? "").trim();
     const name = (cells[colIndex.name] ?? "").trim();
-    const typeRaw = (cells[colIndex.type] ?? "").trim().toLowerCase();
+    const typeRaw = (cells[colIndex.type] ?? "").trim();
     const group = (cells[colIndex.parent_group] ?? "").trim() || null;
 
     const errors: string[] = [];
-    const typeOk = validTypes.includes(typeRaw);
-    if (!typeOk) errors.push(`Type must be one of ${validTypes.join(", ")}.`);
-    const type = (typeOk ? typeRaw : "asset") as AccountType;
+    const normType = normalizeType(typeRaw);
+    if (!normType) errors.push(`Type “${typeRaw || "(blank)"}” is not recognised (Asset, Liability, Equity, Revenue, Expense, Other Income, Other Expense).`);
+    const type = (normType ?? "asset") as AccountType;
 
     const draft: AccountDraft = { code, name, type, parent_group: group };
     const result = validateAccount(draft, running, { allowOverride: true });
