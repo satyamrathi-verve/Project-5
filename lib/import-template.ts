@@ -20,12 +20,12 @@ export const TEMPLATE_HEADERS = [
   "Description",
 ] as const;
 
+// Demonstration rows for the Import dialog's "Load Sample" preview ONLY (never the
+// downloadable template). Generic data — one valid row, one intentionally invalid
+// (duplicate Account Code) so first-time users see exactly one pass and one error.
 export const TEMPLATE_SAMPLE: string[][] = [
-  ["1000", "Cash on Hand", "Asset", "Current Assets", "Debit", "Active", "Cash available in hand"],
-  ["1010", "Petty Cash", "Asset", "Current Assets", "Debit", "Active", "Office petty cash"],
-  ["2000", "Accounts Payable", "Liability", "Current Liabilities", "Credit", "Active", "Trade payables"],
-  ["4000", "Product Sales", "Revenue", "Revenue", "Credit", "Active", "Sales revenue"],
-  ["6000", "Rent Expense", "Expense", "Operating Expenses", "Debit", "Active", "Office rent"],
+  ["5100", "Internet Expense", "Expense", "Operating Expenses", "Debit", "Active", "Monthly internet charges"],
+  ["5100", "Internet Expense Duplicate", "Expense", "Operating Expenses", "Debit", "Active", "Duplicate account code"],
 ];
 
 export const TEMPLATE_TYPES = ["Asset", "Liability", "Equity", "Revenue", "Expense", "Other Income", "Other Expense"];

@@ -2398,6 +2398,7 @@ function ImportModal({
   const [parsed, setParsed] = useState<ParsedImportRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [sampleLoaded, setSampleLoaded] = useState(false);
   const sample = sampleCsv(); // "Load Sample" demo rows (the downloadable template is headers-only)
 
   const runParse = (raw: string) => {
@@ -2407,6 +2408,7 @@ function ImportModal({
   const onFile = async (file?: File) => {
     if (!file) return;
     try {
+      setSampleLoaded(false);
       runParse(await fileToCsvText(file));
     } catch {
       onError("Couldn't read that file. Use the template's .xlsx or .csv.");
@@ -2479,17 +2481,41 @@ function ImportModal({
               >
                 <Icon name="download" size={13} /> Download CSV Template
               </button>
-              <button onClick={() => runParse(sample)} className="px-1 text-xs font-medium text-brand hover:underline dark:text-brand-light">
+              <button
+                onClick={() => {
+                  setSampleLoaded(true);
+                  runParse(sample);
+                }}
+                className="px-1 text-xs font-medium text-brand hover:underline dark:text-brand-light"
+              >
                 Load Sample
               </button>
             </div>
           </div>
-          <textarea value={text} onChange={(e) => runParse(e.target.value)} rows={5} placeholder={sample} className={`${inputClass} w-full font-mono text-xs`} />
+          <textarea
+            value={text}
+            onChange={(e) => {
+              setSampleLoaded(false);
+              runParse(e.target.value);
+            }}
+            rows={5}
+            placeholder={sample}
+            className={`${inputClass} w-full font-mono text-xs`}
+          />
           {parsed && (
             <div className="mt-4">
-              <div className="mb-2 flex items-center gap-3 text-sm">
-                <span className="font-medium text-emerald-700 dark:text-emerald-400">{valid.length} valid</span>
-                <span className="font-medium text-red-600 dark:text-red-400">{parsed.length - valid.length} with errors</span>
+              {sampleLoaded && (
+                <p className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                  This sample demonstrates how valid and invalid rows are identified before importing.
+                </p>
+              )}
+              <div className="mb-2 flex items-center gap-4 text-sm">
+                <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
+                  <Icon name="check" size={14} /> {valid.length} Valid Row{valid.length === 1 ? "" : "s"}
+                </span>
+                <span className="inline-flex items-center gap-1 font-medium text-red-600 dark:text-red-400">
+                  <Icon name="close" size={14} /> {parsed.length - valid.length} Invalid Row{parsed.length - valid.length === 1 ? "" : "s"}
+                </span>
               </div>
               <div className="max-h-64 overflow-auto rounded-lg border border-slate-200 dark:border-slate-800">
                 <table className="w-full text-xs">
