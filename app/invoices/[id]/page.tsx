@@ -15,6 +15,7 @@ import { formatMoney } from "@/lib/balances";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { VerveLogo } from "@/components/VerveLogo";
+import { CollectionFollowups } from "@/components/CollectionFollowups";
 
 /*
   Sales Invoice — View (one invoice in full detail, with amount still outstanding).
@@ -208,6 +209,19 @@ export default function InvoiceViewPage() {
     };
   }, [id]);
 
+  // Give this page its own document title so the browser's print header shows the
+  // invoice number (e.g. "Invoice INV-0007") instead of the app-wide "Verve ERP —
+  // AR Manager". Restored when you leave the page. (To drop the header line
+  // entirely, untick "Headers and footers" in the browser's print dialog.)
+  useEffect(() => {
+    if (!invoice) return;
+    const previous = document.title;
+    document.title = `Invoice ${invoice.invoice_no}`;
+    return () => {
+      document.title = previous;
+    };
+  }, [invoice]);
+
   const paid = useMemo(() => payments.reduce((s, p) => s + p.amount, 0), [payments]);
   const total = num(invoice?.total);
   const outstanding = Math.max(0, total - paid);
@@ -215,6 +229,8 @@ export default function InvoiceViewPage() {
   const overdueDays = invoice ? daysOverdue(invoice.due_date) : 0;
   const isOverdue = outstanding > 0.005 && overdueDays > 0;
   const settled = outstanding <= 0.005;
+  // How long the money has been owed: days since the invoice date (0 once settled).
+  const daysOutstanding = invoice && !settled ? Math.max(0, daysOverdue(invoice.invoice_date)) : 0;
 
   if (!supabase) return <NotConfigured />;
 
@@ -284,42 +300,46 @@ export default function InvoiceViewPage() {
         </div>
       )}
 
-      {/* Money summary — quick glance on screen, hidden on the printed invoice. */}
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3 print:hidden">
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Invoice Total</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{formatMoney(total)}</p>
+      {/* Money summary — compact quick glance on screen, hidden on the printed invoice. */}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 print:hidden">
+        <div className="rounded-lg border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Invoice Amount</p>
+          <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{formatMoney(total)}</p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Received</p>
-          <p className="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{formatMoney(paid)}</p>
+        <div className="rounded-lg border border-slate-200 bg-white p-3.5 dark:border-slate-800 dark:bg-slate-900">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Amount Received</p>
+          <p className="mt-1 text-xl font-bold text-emerald-600 dark:text-emerald-400">{formatMoney(paid)}</p>
         </div>
         <div
-          className={`rounded-xl border p-5 ${
+          className={`rounded-lg border p-3.5 ${
             settled
               ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20"
               : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20"
           }`}
         >
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300">
-            Amount Outstanding
-          </p>
-          <p
-            className={`mt-1 text-2xl font-bold ${
-              settled ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"
-            }`}
-          >
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-600 dark:text-slate-300">Balance Due</p>
+          <p className={`mt-1 text-xl font-bold ${settled ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
             {formatMoney(outstanding)}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <StatusBadge status={invoice.status} />
-            {isOverdue && (
-              <span className="text-xs font-medium text-red-600 dark:text-red-400">
-                {overdueDays} day{overdueDays === 1 ? "" : "s"} overdue
-              </span>
-            )}
-            {settled && <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">Fully paid</span>}
-          </div>
+        </div>
+        <div
+          className={`rounded-lg border p-3.5 ${
+            isOverdue
+              ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20"
+              : "border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900"
+          }`}
+        >
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Days Outstanding</p>
+          <p className={`mt-1 text-xl font-bold ${isOverdue ? "text-red-700 dark:text-red-300" : "text-slate-900 dark:text-white"}`}>
+            {settled ? "—" : `${daysOutstanding} day${daysOutstanding === 1 ? "" : "s"}`}
+          </p>
+          {isOverdue ? (
+            <p className="mt-0.5 text-[11px] font-medium text-red-600 dark:text-red-400">
+              {overdueDays} day{overdueDays === 1 ? "" : "s"} overdue
+            </p>
+          ) : settled ? (
+            <p className="mt-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Fully paid</p>
+          ) : null}
         </div>
       </div>
 
@@ -374,6 +394,16 @@ export default function InvoiceViewPage() {
                   <dt className="text-slate-500 dark:text-slate-400">Due Date</dt>
                   <dd className={`font-medium ${isOverdue ? "text-red-600 dark:text-red-400" : "text-slate-900 dark:text-white"}`}>
                     {fmtDate(invoice.due_date)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-8">
+                  <dt className="text-slate-500 dark:text-slate-400">Days Overdue</dt>
+                  <dd className={`font-medium ${isOverdue ? "text-red-600 dark:text-red-400" : "text-slate-900 dark:text-white"}`}>
+                    {settled
+                      ? "—"
+                      : overdueDays > 0
+                        ? `${overdueDays} day${overdueDays === 1 ? "" : "s"}`
+                        : "Not overdue"}
                   </dd>
                 </div>
                 <div className="flex justify-between gap-8 border-t border-slate-200 pt-2 dark:border-slate-700">
@@ -500,9 +530,12 @@ export default function InvoiceViewPage() {
           </div>
           <div className="sm:text-right">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Terms</p>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-              Payment due by {fmtDate(invoice.due_date)}.
-            </p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-left text-sm text-slate-600 dark:text-slate-300 sm:ml-auto sm:w-max">
+              <li>Payment due within 30 days.</li>
+              <li>Late payment may attract charges as per agreement.</li>
+              <li>Please mention invoice number while making payment.</li>
+              <li>For billing queries, contact accounts@verveadvisory.com.</li>
+            </ul>
             <p className="mt-3 text-xs text-slate-400">
               For {company?.name ?? "Verve Advisory"} · This is a computer-generated invoice.
             </p>
@@ -550,6 +583,9 @@ export default function InvoiceViewPage() {
           </table>
         </div>
       </div>
+
+      {/* Collection follow-up log (screen only) */}
+      <CollectionFollowups invoiceId={invoice.id} />
     </div>
   );
 }
