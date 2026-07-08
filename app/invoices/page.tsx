@@ -243,9 +243,9 @@ export default function InvoicesPage() {
       header: "Customer",
       render: (r) => (
         <div>
-          <div className="font-medium text-slate-800">{r.customers?.name ?? "—"}</div>
+          <div className="font-medium text-slate-800 dark:text-slate-100">{r.customers?.name ?? "—"}</div>
           {r.customers?.code && (
-            <div className="text-xs text-slate-400">{r.customers.code}</div>
+            <div className="text-xs text-slate-400 dark:text-slate-500">{r.customers.code}</div>
           )}
         </div>
       ),
@@ -275,7 +275,7 @@ export default function InvoicesPage() {
       header: "Outstanding",
       className: "text-right tabular-nums",
       render: (r) => (
-        <span className={r.outstanding > 0 ? "font-semibold text-slate-900" : "text-slate-400"}>
+        <span className={r.outstanding > 0 ? "font-semibold text-slate-900 dark:text-slate-100" : "text-slate-400 dark:text-slate-500"}>
           {fmtMoney(r.outstanding)}
         </span>
       ),
@@ -417,7 +417,7 @@ export default function InvoicesPage() {
                   ? "No invoices in the database yet."
                   : "No invoices match your search or filter."
               }
-              rowClassName={(r) => (r.effectiveStatus === "overdue" ? "bg-red-50" : "")}
+              rowClassName={(r) => (r.effectiveStatus === "overdue" ? "bg-red-50 dark:bg-red-950/40" : "")}
             />
           )}
         </>
