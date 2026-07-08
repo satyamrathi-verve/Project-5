@@ -1,15 +1,17 @@
 "use client";
 
 /*
-  ActivityCenter — one reusable timeline for everything that happened to a record.
-  ================================================================================
+  ActivityCenter — the record's audit / change log only.
+  ======================================================
   Drop into any module with <ActivityCenter module="gl" recordId="1000" />.
-  Merges three sources into a single searchable / filterable timeline table:
-    • the per-record change log (create / edit / status / notes / import / export
-      / print / relationship / version — captured with the signed-in user + reason),
-    • the shared DMS attachment audit history (upload / download / delete / …),
-    • optional seed events a module already knows (e.g. "created" from created_at).
-  Columns: Date & Time · User · Context · Action · Field Changed · Old → New ·
+  A single searchable / filterable timeline of TWO things and nothing else:
+    • Record Changes — changes to the master record itself (create / edit /
+      name / code / type / group / status / parent-sub), with user + reason,
+    • System Events — automatic app events (import, export, auto-numbering,
+      validation, recalculation, sync, migration).
+  It deliberately does NOT show attachment or note activity — those have their
+  own dedicated tabs, so the Activity Center never duplicates them. Columns:
+  Date & Time · User · Context · Action · Field Changed · Old Value · New Value ·
   Reason. Dark-theme consistent; exportable to CSV.
 */
 
@@ -17,27 +19,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "./icons";
 import { inputClass } from "./FormField";
 import { downloadBlob } from "@/lib/import-template";
-import { listAttachments } from "@/lib/attachments/client";
-import type { HistoryAction } from "@/lib/attachments/types";
 import {
   ACTIVITY_CATEGORIES,
   actionMeta,
   getLocalActivity,
   onActivityChange,
-  type ActivityAction,
   type ActivityCategory,
   type ActivityEvent,
 } from "@/lib/activity";
-
-const ATTACH_ACTION: Record<HistoryAction, ActivityAction> = {
-  uploaded: "attachment_uploaded",
-  replaced: "attachment_replaced",
-  renamed: "attachment_renamed",
-  deleted: "attachment_deleted",
-  downloaded: "attachment_downloaded",
-  tagged: "attachment_tagged",
-  restored: "attachment_restored",
-};
 
 function fmt(iso: string): { date: string; time: string } {
   const d = new Date(iso);
@@ -61,50 +50,21 @@ export function ActivityCenter({
   seedEvents?: ActivityEvent[];
 }) {
   const [local, setLocal] = useState<ActivityEvent[]>([]);
-  const [attach, setAttach] = useState<ActivityEvent[]>([]);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<ActivityCategory | "all">("all");
   const [userFilter, setUserFilter] = useState("");
 
-  // local change log (live via pub/sub)
+  // local change log (live via pub/sub) — record changes + system events only
   const refreshLocal = useCallback(() => setLocal(getLocalActivity(module, recordId)), [module, recordId]);
   useEffect(() => {
     refreshLocal();
     return onActivityChange(refreshLocal);
   }, [refreshLocal]);
 
-  // shared attachment audit history from the DMS
-  useEffect(() => {
-    let cancelled = false;
-    void listAttachments(module, recordId)
-      .then((res) => {
-        if (cancelled) return;
-        const mapped: ActivityEvent[] = res.history.map((h) => ({
-          id: `att-${h.id}`,
-          module,
-          recordId,
-          at: h.at,
-          user: h.user,
-          context: h.file,
-          action: ATTACH_ACTION[h.action] ?? "version",
-          field: null,
-          oldValue: null,
-          newValue: h.detail ?? null,
-          reason: null,
-          source: "attachments",
-        }));
-        setAttach(mapped);
-      })
-      .catch(() => setAttach([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [module, recordId]);
-
   const events = useMemo(() => {
-    const all = [...(seedEvents ?? []), ...local, ...attach];
+    const all = [...(seedEvents ?? []), ...local];
     return all.sort((a, b) => (a.at < b.at ? 1 : -1));
-  }, [seedEvents, local, attach]);
+  }, [seedEvents, local]);
 
   const users = useMemo(() => [...new Set(events.map((e) => e.user))].sort(), [events]);
 
@@ -173,7 +133,7 @@ export function ActivityCenter({
           <span className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500"><Icon name="clock" size={22} /></span>
           <p className="mt-3 text-sm font-semibold text-slate-700 dark:text-slate-200">No activity yet</p>
           <p className="mt-1 max-w-sm text-xs text-slate-500 dark:text-slate-400">
-            Creates, edits, status changes, notes, attachments and exports for this record will appear here — with who did it, when, and why.
+            Record changes (create, edit, status, code/name/type/group) and system events (import, export, auto-numbering) for this record appear here — with who did it, when, and why.
           </p>
         </div>
       ) : (
@@ -236,7 +196,7 @@ export function ActivityCenter({
       )}
 
       <p className="text-[11px] text-slate-400 dark:text-slate-500">
-        Change log is recorded in this browser; attachment history is shared. {contextLabel ? `Record: ${contextLabel}.` : ""}
+        Record changes &amp; system events only — attachments and notes have their own tabs. {contextLabel ? `Record: ${contextLabel}.` : ""}
       </p>
     </div>
   );

@@ -9,33 +9,30 @@
 */
 
 export type ActivityAction =
-  // record lifecycle
+  // ── Record Changes — changes to the master record itself ──
   | "created"
   | "updated" // a single field change (field/oldValue/newValue set)
   | "status_changed"
   | "deleted"
   | "restored"
   | "relationship_changed"
-  | "viewed"
-  // notes
-  | "note_added"
-  | "note_updated"
-  | "note_deleted"
-  // attachments (sourced from the DMS audit history)
-  | "attachment_uploaded"
-  | "attachment_downloaded"
-  | "attachment_deleted"
-  | "attachment_replaced"
-  | "attachment_renamed"
-  | "attachment_tagged"
-  | "attachment_restored"
-  // system
+  // ── System Events — automatic application events ──
   | "imported"
   | "exported"
   | "printed"
+  | "numbered" // auto numbering
+  | "validated" // background validation
+  | "recalculated" // balance recalculation
+  | "synchronized" // synchronization
+  | "migrated" // data migration
   | "version";
 
-export type ActivityCategory = "modification" | "notes" | "attachments" | "system";
+/**
+ * Exactly two visible categories (plus "All"): the record's own changes, and
+ * automatic system events. Attachments and Notes are deliberately NOT here —
+ * they have dedicated tabs, so the Activity Center never duplicates them.
+ */
+export type ActivityCategory = "record" | "system";
 
 export interface ActivityEvent {
   id: string;

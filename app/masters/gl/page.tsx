@@ -1899,9 +1899,8 @@ function AccountDrawer({
     }
   }, [account?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The note text that was present when the field last gained focus — so we log a
-  // single Activity event on blur instead of one per keystroke.
-  const noteAtFocus = useRef("");
+  // Notes have their own dedicated tab, so note edits are intentionally NOT
+  // logged to the Activity Center (which is record changes + system events only).
   const saveNote = (v: string) => {
     setNote(v);
     if (!account) return;
@@ -1912,18 +1911,6 @@ function AccountDrawer({
     } catch {
       /* ignore */
     }
-  };
-  const commitNoteActivity = () => {
-    if (!account) return;
-    const before = noteAtFocus.current.trim();
-    const after = note.trim();
-    if (before === after) return;
-    logActivity({
-      module: "gl",
-      recordId: account.code,
-      context: `${account.code} · ${account.name}`,
-      action: after ? (before ? "note_updated" : "note_added") : "note_deleted",
-    });
   };
 
   const onTypeChange = (type: AccountType) => {
@@ -1997,6 +1984,11 @@ function AccountDrawer({
       );
     } else {
       logActivity({ module: "gl", recordId: payload.code, context: ctx, action: "created", newValue: ctx, reason });
+      // Genuine system event: the account code was assigned by the app's
+      // auto-numbering (not typed by the user).
+      if (!codeTouched && !override) {
+        logActivity({ module: "gl", recordId: payload.code, context: ctx, action: "numbered", field: "Account code", newValue: payload.code });
+      }
     }
     await onSaved(mode === "edit" ? `Updated ${ctx}.` : `Created ${ctx}.`);
   };
@@ -2116,8 +2108,6 @@ function AccountDrawer({
                   <textarea
                     value={note}
                     onChange={(e) => saveNote(e.target.value)}
-                    onFocus={() => (noteAtFocus.current = note)}
-                    onBlur={commitNoteActivity}
                     rows={8}
                     placeholder="Add a note about this account…"
                     className={`${inputClass} w-full`}

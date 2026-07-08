@@ -18,31 +18,25 @@ const CREATE = "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-
 const UPDATE = "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400";
 const STATUS = "bg-sky-50 text-sky-600 dark:bg-sky-500/10 dark:text-sky-400";
 const DANGER = "bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400";
-const NOTE = "bg-violet-50 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400";
-const ATTACH = "bg-teal-50 text-teal-600 dark:bg-teal-500/10 dark:text-teal-400";
 const SYSTEM = "bg-slate-100 text-slate-500 dark:bg-slate-700/40 dark:text-slate-300";
 
 export const ACTION_META: Record<ActivityAction, ActionMeta> = {
-  created: { label: "Created", icon: "plus", category: "modification", tone: CREATE },
-  updated: { label: "Field changed", icon: "pencil", category: "modification", tone: UPDATE },
-  status_changed: { label: "Status changed", icon: "check", category: "modification", tone: STATUS },
-  deleted: { label: "Deleted", icon: "trash", category: "modification", tone: DANGER },
-  restored: { label: "Restored", icon: "clock", category: "modification", tone: UPDATE },
-  relationship_changed: { label: "Relationship changed", icon: "link", category: "modification", tone: STATUS },
-  viewed: { label: "Viewed", icon: "eye", category: "system", tone: SYSTEM },
-  note_added: { label: "Note added", icon: "file", category: "notes", tone: NOTE },
-  note_updated: { label: "Note updated", icon: "file", category: "notes", tone: NOTE },
-  note_deleted: { label: "Note removed", icon: "file", category: "notes", tone: NOTE },
-  attachment_uploaded: { label: "File uploaded", icon: "upload", category: "attachments", tone: ATTACH },
-  attachment_downloaded: { label: "File downloaded", icon: "download", category: "attachments", tone: ATTACH },
-  attachment_deleted: { label: "File deleted", icon: "trash", category: "attachments", tone: DANGER },
-  attachment_replaced: { label: "File replaced", icon: "upload", category: "attachments", tone: ATTACH },
-  attachment_renamed: { label: "File renamed", icon: "pencil", category: "attachments", tone: ATTACH },
-  attachment_tagged: { label: "File tagged", icon: "star", category: "attachments", tone: ATTACH },
-  attachment_restored: { label: "Version restored", icon: "clock", category: "attachments", tone: ATTACH },
-  imported: { label: "Imported", icon: "upload", category: "system", tone: SYSTEM },
-  exported: { label: "Exported", icon: "download", category: "system", tone: SYSTEM },
-  printed: { label: "Printed", icon: "file", category: "system", tone: SYSTEM },
+  // Record Changes
+  created: { label: "Account created", icon: "plus", category: "record", tone: CREATE },
+  updated: { label: "Field changed", icon: "pencil", category: "record", tone: UPDATE },
+  status_changed: { label: "Status changed", icon: "check", category: "record", tone: STATUS },
+  deleted: { label: "Account deleted", icon: "trash", category: "record", tone: DANGER },
+  restored: { label: "Restored", icon: "clock", category: "record", tone: UPDATE },
+  relationship_changed: { label: "Parent / sub-account changed", icon: "link", category: "record", tone: STATUS },
+  // System Events
+  imported: { label: "Import completed", icon: "upload", category: "system", tone: SYSTEM },
+  exported: { label: "Export generated", icon: "download", category: "system", tone: SYSTEM },
+  printed: { label: "Print generated", icon: "file", category: "system", tone: SYSTEM },
+  numbered: { label: "Auto numbering", icon: "bars", category: "system", tone: SYSTEM },
+  validated: { label: "Background validation", icon: "check", category: "system", tone: SYSTEM },
+  recalculated: { label: "Balance recalculation", icon: "trend", category: "system", tone: SYSTEM },
+  synchronized: { label: "Synchronization", icon: "link", category: "system", tone: SYSTEM },
+  migrated: { label: "Data migration", icon: "upload", category: "system", tone: SYSTEM },
   version: { label: "Version", icon: "clock", category: "system", tone: SYSTEM },
 };
 
@@ -55,9 +49,7 @@ export interface CategoryFilter {
   label: string;
 }
 export const ACTIVITY_CATEGORIES: CategoryFilter[] = [
-  { key: "all", label: "All activity" },
-  { key: "modification", label: "Modifications" },
-  { key: "attachments", label: "Attachments" },
-  { key: "notes", label: "Notes" },
-  { key: "system", label: "System" },
+  { key: "all", label: "All Activity" },
+  { key: "record", label: "Record Changes" },
+  { key: "system", label: "System Events" },
 ];
