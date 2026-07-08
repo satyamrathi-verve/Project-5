@@ -27,6 +27,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { BankAccount, CashFlowTxn, DateRange, ForecastItem } from "./types";
+import { CASHFLOW_DEMO, demoBankAccounts, demoForecast, demoTransactions } from "./demo";
 
 type Row = Record<string, unknown>;
 
@@ -46,6 +47,7 @@ const BANK_COLUMNS = {
 };
 
 export async function fetchBankAccounts(supabase: SupabaseClient): Promise<BankAccount[]> {
+  if (CASHFLOW_DEMO) return demoBankAccounts();
   if (!BANK_ACCOUNTS_TABLE) return [];
   const res = await supabase.from(BANK_ACCOUNTS_TABLE).select("*");
   if (res.error || !res.data) return [];
@@ -82,10 +84,11 @@ export const CASH_SOURCES: CashSource[] = [];
 
 /** True while the engine has no wired sources (drives honest ₹0.00 empty states). */
 export function isGated(): boolean {
-  return CASH_SOURCES.length === 0;
+  return !CASHFLOW_DEMO && CASH_SOURCES.length === 0;
 }
 
 export async function fetchTransactions(supabase: SupabaseClient, range?: DateRange): Promise<CashFlowTxn[]> {
+  if (CASHFLOW_DEMO) return demoTransactions(new Date());
   if (CASH_SOURCES.length === 0) return [];
 
   const all: CashFlowTxn[] = [];
@@ -131,6 +134,7 @@ export const FORECAST_SOURCES_WIRING: ForecastSourceWiring[] = [];
 
 export async function fetchForecast(supabase: SupabaseClient, _horizonDays: number): Promise<ForecastItem[]> {
   void _horizonDays;
+  if (CASHFLOW_DEMO) return demoForecast(new Date());
   if (FORECAST_SOURCES_WIRING.length === 0) return [];
 
   const items: ForecastItem[] = [];

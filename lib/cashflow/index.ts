@@ -16,3 +16,4 @@ export {
   fetchBankAccounts,
   fetchForecast,
 } from "./engine";
+export { CASHFLOW_DEMO, demoDefaultRange } from "./demo";

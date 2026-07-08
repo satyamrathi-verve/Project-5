@@ -35,6 +35,8 @@ import {
   resolveRange,
   runningBalanceSeries,
   withRunningBalance,
+  CASHFLOW_DEMO,
+  demoDefaultRange,
   type CashFlowData,
   type CashFlowFilters,
   type CashFlowRow,
@@ -60,19 +62,24 @@ export default function CashFlowPage() {
   const [horizonDays, setHorizonDays] = useState(90);
   const [drill, setDrill] = useState<CashFlowRow | null>(null);
 
-  const [filters, setFilters] = useState<CashFlowFilters>(() => ({
-    rangePreset: "month",
-    range: resolveRange("month", new Date()),
-    companyId: null,
-    bankAccountId: null,
-    category: null,
-    type: null,
-    department: null,
-    location: null,
-    project: null,
-    direction: null,
-    search: "",
-  }));
+  const [filters, setFilters] = useState<CashFlowFilters>(() => {
+    const start = new Date();
+    // In demo mode open on a trailing-12-month range so the dashboard is fully
+    // populated (headline KPIs land exactly); otherwise default to this month.
+    return {
+      rangePreset: CASHFLOW_DEMO ? "custom" : "month",
+      range: CASHFLOW_DEMO ? demoDefaultRange(start) : resolveRange("month", start),
+      companyId: null,
+      bankAccountId: null,
+      category: null,
+      type: null,
+      department: null,
+      location: null,
+      project: null,
+      direction: null,
+      search: "",
+    };
+  });
 
   // ── load (dimensions are real; transactions come from the gated engine) ────
   useEffect(() => {
@@ -187,6 +194,14 @@ export default function CashFlowPage() {
       <PageHeader
         title="Cash Flow"
         subtitle="Real-time cash movement, forecast and position across the business"
+        action={
+          CASHFLOW_DEMO ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+              Demo data
+            </span>
+          ) : undefined
+        }
       />
 
       {data?.gated && (
