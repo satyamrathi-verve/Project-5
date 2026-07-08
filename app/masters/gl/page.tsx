@@ -204,6 +204,7 @@ function Popover({
   onClose,
   align = "right",
   width = 192,
+  padded = true,
   children,
 }: {
   open: boolean;
@@ -211,6 +212,7 @@ function Popover({
   onClose: () => void;
   align?: "left" | "right";
   width?: number;
+  padded?: boolean;
   children: React.ReactNode;
 }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -245,7 +247,7 @@ function Popover({
       <div className="fixed inset-0 z-[45]" onClick={onClose} aria-hidden="true" />
       <div
         role="menu"
-        className="fixed z-[46] rounded-xl border border-slate-200 bg-white p-2 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800"
+        className={`fixed z-[46] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${padded ? "p-2" : ""}`}
         style={{ top: pos.top, left: pos.left, width }}
       >
         {children}
@@ -269,48 +271,52 @@ function hierarchyPath(a: GLAccount): string {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-column filtering (Excel/NetSuite-style) — client-side, AND logic
+// Excel-style AutoFilter model — per column, a SET of selected facet values.
+// `null` = no filter (all values selected). A row passes when, for every column
+// with an active filter, its facet value is in that column's set (AND logic).
 // ---------------------------------------------------------------------------
-type TextOp = "contains" | "starts" | "ends" | "equals";
-interface TextFilterState {
-  op: TextOp;
-  v: string;
-}
-export interface ColFilters {
-  code: TextFilterState;
-  name: TextFilterState;
-  type: "" | AccountType;
-  group: string;
-  balance: "" | "debit" | "credit";
-  status: "" | "active" | "inactive";
-  favourite: "" | "yes" | "no";
-}
-const EMPTY_COL_FILTERS: ColFilters = {
-  code: { op: "contains", v: "" },
-  name: { op: "contains", v: "" },
-  type: "",
-  group: "",
-  balance: "",
-  status: "",
-  favourite: "",
+export type FilterKey = "code" | "name" | "type" | "group" | "balance" | "status" | "favourite";
+export type ColumnFilters = Record<FilterKey, string[] | null>;
+
+const FILTER_KEYS: FilterKey[] = ["code", "name", "type", "group", "balance", "status", "favourite"];
+const FILTER_LABEL: Record<FilterKey, string> = {
+  code: "Code",
+  name: "Account name",
+  type: "Type",
+  group: "Group",
+  balance: "Debit / Credit",
+  status: "Status",
+  favourite: "Favourite",
 };
-const OP_LABEL: Record<TextOp, string> = {
-  contains: "contains",
-  starts: "starts with",
-  ends: "ends with",
-  equals: "equals",
+const EMPTY_COL_FILTERS: ColumnFilters = {
+  code: null,
+  name: null,
+  type: null,
+  group: null,
+  balance: null,
+  status: null,
+  favourite: null,
 };
 const COLF_KEY = "gl.colFilters";
 
-/** Case-insensitive text match by operator. Empty needle always matches. */
-function textMatch(op: TextOp, hay: string, needle: string): boolean {
-  if (!needle) return true;
-  const h = hay.toLowerCase();
-  const n = needle.toLowerCase();
-  if (op === "starts") return h.startsWith(n);
-  if (op === "ends") return h.endsWith(n);
-  if (op === "equals") return h === n;
-  return h.includes(n);
+/** The display value a row contributes to a column's filter facet. */
+function facetOf(a: GLAccount, key: FilterKey, inactive: Set<string>, favorites: Set<string>): string {
+  switch (key) {
+    case "code":
+      return a.code;
+    case "name":
+      return a.name;
+    case "type":
+      return typeLabel(a.type);
+    case "group":
+      return a.parent_group ?? "Ungrouped";
+    case "balance":
+      return typeMeta(a.type).normalBalance === "debit" ? "Debit" : "Credit";
+    case "status":
+      return inactive.has(a.id) ? "Inactive" : "Active";
+    case "favourite":
+      return favorites.has(a.id) ? "Yes" : "No";
+  }
 }
 
 // ===========================================================================
@@ -324,7 +330,7 @@ export default function GLMasterPage() {
 
   // query state
   const [search, setSearch] = useState("");
-  const [colFilters, setColFilters] = useState<ColFilters>(EMPTY_COL_FILTERS);
+  const [colFilters, setColFilters] = useState<ColumnFilters>(EMPTY_COL_FILTERS);
   const [sortKey, setSortKey] = useState<SortKey>("code");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -349,7 +355,6 @@ export default function GLMasterPage() {
   const [statusChange, setStatusChange] = useState<{ account: GLAccount; toInactive: boolean } | null>(null);
   const [toast, setToast] = useState<{ msg: string; tone: "ok" | "err" } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const filterRef = useRef<HTMLInputElement>(null);
   const colBtnRef = useRef<HTMLDivElement>(null);
 
   const flash = useCallback((msg: string, tone: "ok" | "err" = "ok") => {
@@ -406,7 +411,15 @@ export default function GLMasterPage() {
       if (Array.isArray(f)) setFavorites(new Set(f));
       if (Array.isArray(r)) setRecent(r);
       if (Array.isArray(s)) setInactive(new Set(s));
-      if (cf && typeof cf === "object") setColFilters({ ...EMPTY_COL_FILTERS, ...cf });
+      if (cf && typeof cf === "object") {
+        // Accept only the new shape (null | string[]); ignore legacy/malformed data.
+        const clean: ColumnFilters = { ...EMPTY_COL_FILTERS };
+        for (const key of FILTER_KEYS) {
+          const val = (cf as Record<string, unknown>)[key];
+          if (Array.isArray(val) && val.every((x) => typeof x === "string")) clean[key] = val as string[];
+        }
+        setColFilters(clean);
+      }
     } catch {
       /* ignore malformed storage */
     }
@@ -497,23 +510,23 @@ export default function GLMasterPage() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const cf = colFilters;
+    // Build a lookup Set per active column filter (AND across columns).
+    const sets: Partial<Record<FilterKey, Set<string>>> = {};
+    for (const key of FILTER_KEYS) {
+      const sel = colFilters[key];
+      if (sel) sets[key] = new Set(sel);
+    }
     let rows = accounts.filter((a) => {
       // global search (all fields)
       if (q) {
         const hay = `${a.code} ${a.name} ${a.parent_group ?? ""} ${typeLabel(a.type)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
-      // per-column filters — all must pass (AND)
-      if (!textMatch(cf.code.op, a.code, cf.code.v)) return false;
-      if (!textMatch(cf.name.op, a.name, cf.name.v)) return false;
-      if (cf.type && a.type !== cf.type) return false;
-      if (cf.group && (a.parent_group ?? "Ungrouped") !== cf.group) return false;
-      if (cf.balance && typeMeta(a.type).normalBalance !== cf.balance) return false;
-      if (cf.status === "active" && inactive.has(a.id)) return false;
-      if (cf.status === "inactive" && !inactive.has(a.id)) return false;
-      if (cf.favourite === "yes" && !favorites.has(a.id)) return false;
-      if (cf.favourite === "no" && favorites.has(a.id)) return false;
+      // per-column Excel-style value filters — every active column must match
+      for (const key of FILTER_KEYS) {
+        const set = sets[key];
+        if (set && !set.has(facetOf(a, key, inactive, favorites))) return false;
+      }
       return true;
     });
     rows = [...rows].sort((a, b) => {
@@ -553,6 +566,18 @@ export default function GLMasterPage() {
     setPage(1);
   }, [search, colFilters, pageSize]);
 
+  // Unique facet values per column (for the Excel filter checkbox lists) —
+  // generated dynamically from the data, never hard-coded.
+  const facetValues = useMemo(() => {
+    const map = {} as Record<FilterKey, string[]>;
+    for (const key of FILTER_KEYS) {
+      const set = new Set<string>();
+      for (const a of accounts) set.add(facetOf(a, key, inactive, favorites));
+      map[key] = [...set].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+    }
+    return map;
+  }, [accounts, inactive, favorites]);
+
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else {
@@ -560,11 +585,15 @@ export default function GLMasterPage() {
       setSortDir("asc");
     }
   };
-  const setCol = useCallback(
-    <K extends keyof ColFilters>(key: K, val: ColFilters[K]) => setColFilters((prev) => ({ ...prev, [key]: val })),
+  const setSort = useCallback((key: SortKey, dir: "asc" | "desc") => {
+    setSortKey(key);
+    setSortDir(dir);
+  }, []);
+  const applyFilter = useCallback(
+    (key: FilterKey, next: string[] | null) => setColFilters((prev) => ({ ...prev, [key]: next })),
     [],
   );
-  const clearCol = (key: keyof ColFilters) => setColFilters((prev) => ({ ...prev, [key]: EMPTY_COL_FILTERS[key] }));
+  const clearFilter = useCallback((key: FilterKey) => applyFilter(key, null), [applyFilter]);
   const resetFilters = () => {
     setSearch("");
     setColFilters(EMPTY_COL_FILTERS);
@@ -673,13 +702,6 @@ export default function GLMasterPage() {
         setColMenuOpen(false);
         return;
       }
-      // Alt+F → focus the first column filter (works even while typing elsewhere)
-      if (e.altKey && (e.key === "f" || e.key === "F")) {
-        e.preventDefault();
-        setView("flat");
-        setTimeout(() => filterRef.current?.focus(), 0);
-        return;
-      }
       if (typing) return;
       if (e.key === "/") {
         e.preventDefault();
@@ -715,16 +737,15 @@ export default function GLMasterPage() {
     );
   }
 
-  const cf = colFilters;
   const chips: { key: string; label: string; clear: () => void }[] = [];
   if (search) chips.push({ key: "search", label: `Search: “${search}”`, clear: () => setSearch("") });
-  if (cf.code.v) chips.push({ key: "code", label: `Code ${OP_LABEL[cf.code.op]} “${cf.code.v}”`, clear: () => clearCol("code") });
-  if (cf.name.v) chips.push({ key: "name", label: `Name ${OP_LABEL[cf.name.op]} “${cf.name.v}”`, clear: () => clearCol("name") });
-  if (cf.type) chips.push({ key: "type", label: `Type: ${typeLabel(cf.type)}`, clear: () => clearCol("type") });
-  if (cf.group) chips.push({ key: "group", label: `Group: ${cf.group}`, clear: () => clearCol("group") });
-  if (cf.balance) chips.push({ key: "balance", label: cf.balance === "debit" ? "Debit" : "Credit", clear: () => clearCol("balance") });
-  if (cf.status) chips.push({ key: "status", label: cf.status === "active" ? "Active" : "Inactive", clear: () => clearCol("status") });
-  if (cf.favourite) chips.push({ key: "favourite", label: `Favourite: ${cf.favourite === "yes" ? "Yes" : "No"}`, clear: () => clearCol("favourite") });
+  for (const key of FILTER_KEYS) {
+    const sel = colFilters[key];
+    if (sel) {
+      const label = sel.length === 1 ? `${FILTER_LABEL[key]}: ${sel[0]}` : `${FILTER_LABEL[key]}: ${sel.length} selected`;
+      chips.push({ key, label, clear: () => clearFilter(key) });
+    }
+  }
 
   return (
     <>
@@ -767,7 +788,7 @@ export default function GLMasterPage() {
               currency={currency}
               chip={t.badge}
               icon={TYPE_ICON[t.type]}
-              onClick={() => setCol("type", t.type)}
+              onClick={() => applyFilter("type", [typeLabel(t.type)])}
             />
           );
         })}
@@ -951,9 +972,10 @@ export default function GLMasterPage() {
           balances={balances}
           currency={currency}
           colFilters={colFilters}
-          onColFilter={setCol}
-          groups={groups}
-          filterRef={filterRef}
+          facetValues={facetValues}
+          onApplyFilter={applyFilter}
+          onClearFilter={clearFilter}
+          onSetSort={setSort}
           sortKey={sortKey}
           sortDir={sortDir}
           onSort={toggleSort}
@@ -1144,31 +1166,6 @@ function SummaryCard({
   );
 }
 
-function SortHeader({
-  label,
-  active,
-  dir,
-  onClick,
-  className,
-}: {
-  label: string;
-  active: boolean;
-  dir: "asc" | "desc";
-  onClick: () => void;
-  className?: string;
-}) {
-  return (
-    <th className={`px-4 py-3 font-semibold text-slate-600 dark:text-slate-300 ${className ?? ""}`}>
-      <button onClick={onClick} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white">
-        {label}
-        <span className={`text-[10px] ${active ? "text-brand dark:text-brand-light" : "text-slate-300 dark:text-slate-600"}`}>
-          {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
-        </span>
-      </button>
-    </th>
-  );
-}
-
 function RowMenu({ onDuplicate, onHistory, onDelete }: { onDuplicate: () => void; onHistory: () => void; onDelete: () => void }) {
   const [open, setOpen] = useState(false);
   return (
@@ -1212,122 +1209,197 @@ function RowMenu({ onDuplicate, onHistory, onDelete }: { onDuplicate: () => void
 }
 
 // ===========================================================================
-// Filter-row cells (Excel-style per-column filters)
+// Column header with integrated sort + filter popover (portal — never clipped)
 // ===========================================================================
 
-function TextFilterCell({
-  value,
-  op,
-  onValue,
-  onOp,
-  placeholder,
-  inputRef,
+function FilterHead({
+  label,
+  className,
+  align = "left",
+  sort,
+  filterActive,
+  filterCount,
+  filterWidth = 216,
+  filterTitle,
+  renderFilter,
 }: {
-  value: string;
-  op: TextOp;
-  onValue: (v: string) => void;
-  onOp: (op: TextOp) => void;
-  placeholder: string;
-  inputRef?: React.RefObject<HTMLInputElement>;
+  label: string;
+  className?: string;
+  align?: "left" | "right";
+  sort?: { active: boolean; dir: "asc" | "desc"; onClick: () => void };
+  filterActive?: boolean;
+  filterCount?: number;
+  filterWidth?: number;
+  filterTitle?: string;
+  renderFilter?: (close: () => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const OPS: [TextOp, string][] = [
-    ["contains", "Contains"],
-    ["starts", "Starts with"],
-    ["ends", "Ends with"],
-    ["equals", "Equals"],
-  ];
+  const anchor = useRef<HTMLSpanElement>(null);
   return (
-    <div className="relative flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title={`Match: ${OP_LABEL[op]}`}
-        aria-label={`Match type: ${OP_LABEL[op]}`}
-        className={`flex-none rounded border p-1 transition hover:bg-slate-100 dark:hover:bg-slate-700 ${
-          value ? "border-brand/40 text-brand dark:text-brand-light" : "border-slate-300 text-slate-400 dark:border-slate-700"
-        }`}
-      >
-        <Icon name="filter" size={12} />
-      </button>
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(e) => onValue(e.target.value)}
-        placeholder={placeholder}
-        className="w-full min-w-0 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-800 outline-none focus:border-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
-      />
-      {open && (
-        <>
-          <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-40 mt-1 w-32 rounded-lg border border-slate-200 bg-white p-1 shadow-soft dark:border-slate-700 dark:bg-slate-800">
-            {OPS.map(([o, l]) => (
-              <button
-                key={o}
-                onClick={() => {
-                  onOp(o);
-                  setOpen(false);
-                }}
-                className={`block w-full rounded px-2 py-1 text-left text-xs ${
-                  op === o
-                    ? "bg-brand/10 font-medium text-brand dark:text-brand-light"
-                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
-                }`}
-              >
-                {l}
-              </button>
-            ))}
-          </div>
-        </>
+    <th className={`py-3 font-semibold text-slate-600 dark:text-slate-300 ${className ?? ""}`}>
+      <div className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
+        {sort ? (
+          <button onClick={sort.onClick} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white">
+            {label}
+            <span className={`text-[10px] ${sort.active ? "text-brand dark:text-brand-light" : "text-slate-300 dark:text-slate-600"}`}>
+              {sort.active ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
+            </span>
+          </button>
+        ) : label ? (
+          <span>{label}</span>
+        ) : null}
+        {renderFilter && (
+          <span ref={anchor} className="relative inline-flex">
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              title={filterTitle ?? `Filter ${label}`}
+              aria-label={filterTitle ?? `Filter ${label}`}
+              className={`rounded p-0.5 transition ${
+                filterActive
+                  ? "bg-brand/10 text-brand dark:text-brand-light"
+                  : "text-slate-300 hover:bg-slate-100 hover:text-slate-500 dark:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-400"
+              }`}
+            >
+              <Icon name="filter" size={12} filled={filterActive} />
+            </button>
+            {filterActive && filterCount !== undefined && (
+              <span className="pointer-events-none absolute -right-1.5 -top-1.5 min-w-[13px] rounded-full bg-brand px-0.5 text-center text-[8px] font-bold leading-[13px] text-white">
+                {filterCount}
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+      {renderFilter && (
+        <Popover open={open} anchorRef={anchor} onClose={() => setOpen(false)} align={align} width={filterWidth} padded={false}>
+          {renderFilter(() => setOpen(false))}
+        </Popover>
       )}
-    </div>
+    </th>
   );
 }
 
-function SelectFilterCell({
-  value,
-  onChange,
-  options,
+/*
+  Excel-style AutoFilter popover content. Shows every unique value in the column
+  as a checkbox (dynamically from the data). Draft state — nothing changes the
+  table until Apply. Select All is tri-state and operates on the visible (search-
+  filtered) values, exactly like Excel. Reopening restores the applied selection.
+*/
+function ExcelFilter({
+  values,
+  selected,
+  onApply,
+  onClear,
+  onClose,
+  onSort,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  options: [string, string][];
+  values: string[];
+  selected: string[] | null; // null = all selected (no filter)
+  onApply: (next: string[] | null) => void;
+  onClear: () => void;
+  onClose: () => void;
+  onSort?: (dir: "asc" | "desc") => void;
 }) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={`w-full min-w-0 rounded border bg-white px-1 py-1 text-xs outline-none focus:border-brand dark:bg-slate-800 ${
-        value ? "border-brand/40 text-brand dark:text-brand-light" : "border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300"
-      }`}
-    >
-      {options.map(([v, l]) => (
-        <option key={v} value={v} className="text-slate-800 dark:text-slate-100">
-          {l}
-        </option>
-      ))}
-    </select>
-  );
-}
+  const [draft, setDraft] = useState<Set<string>>(() => (selected ? new Set(selected) : new Set(values)));
+  const [q, setQ] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const selAllRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
 
-function FavFilterButton({ value, onChange }: { value: "" | "yes" | "no"; onChange: (v: "" | "yes" | "no") => void }) {
-  const next = value === "" ? "yes" : value === "yes" ? "no" : "";
-  const title = value === "" ? "Favourite: All" : value === "yes" ? "Favourite: Yes" : "Favourite: No";
+  const shown = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    return n ? values.filter((v) => v.toLowerCase().includes(n)) : values;
+  }, [values, q]);
+  const shownAll = shown.length > 0 && shown.every((v) => draft.has(v));
+  const shownSome = shown.some((v) => draft.has(v));
+  useEffect(() => {
+    if (selAllRef.current) selAllRef.current.indeterminate = shownSome && !shownAll;
+  }, [shownSome, shownAll]);
+
+  const toggle = (v: string) =>
+    setDraft((prev) => {
+      const n = new Set(prev);
+      n.has(v) ? n.delete(v) : n.add(v);
+      return n;
+    });
+  const toggleAll = () =>
+    setDraft((prev) => {
+      const n = new Set(prev);
+      if (shownAll) shown.forEach((v) => n.delete(v));
+      else shown.forEach((v) => n.add(v));
+      return n;
+    });
+  const apply = () => {
+    const isAll = values.length > 0 && draft.size === values.length && values.every((v) => draft.has(v));
+    onApply(isAll ? null : [...draft]);
+    onClose();
+  };
+
   return (
-    <button
-      type="button"
-      onClick={() => onChange(next)}
-      title={title}
-      aria-label={title}
-      className={`relative rounded p-1 transition hover:bg-slate-100 dark:hover:bg-slate-700 ${
-        value === "yes" ? "text-amber-400" : value === "no" ? "text-slate-400" : "text-slate-300 dark:text-slate-600"
-      }`}
-    >
-      <Icon name="star" size={15} filled={value === "yes"} />
-      {value === "no" && (
-        <span className="absolute inset-0 flex items-center justify-center text-[15px] font-bold leading-none text-red-500">⁄</span>
+    <div className="flex w-full flex-col text-xs">
+      {onSort && (
+        <div className="border-b border-slate-100 p-1 dark:border-slate-700">
+          {(
+            [
+              ["asc", "Sort A → Z", "↑"],
+              ["desc", "Sort Z → A", "↓"],
+            ] as const
+          ).map(([dir, lbl, glyph]) => (
+            <button
+              key={dir}
+              onClick={() => {
+                onSort(dir);
+                onClose();
+              }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              <span className="w-3 text-center text-slate-400">{glyph}</span>
+              {lbl}
+            </button>
+          ))}
+        </div>
       )}
-    </button>
+      <div className="p-1.5">
+        <input ref={searchRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" className={`${inputClass} w-full py-1.5 text-xs`} />
+      </div>
+      <div className="max-h-56 overflow-y-auto px-1.5">
+        <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
+          <input ref={selAllRef} type="checkbox" checked={shownAll} onChange={toggleAll} className="h-3.5 w-3.5 rounded border-slate-300" />
+          (Select All{q ? " Search Results" : ""})
+        </label>
+        {shown.map((v) => (
+          <label key={v} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700">
+            <input type="checkbox" checked={draft.has(v)} onChange={() => toggle(v)} className="h-3.5 w-3.5 rounded border-slate-300" />
+            <span className="truncate" title={v}>
+              {v || "(blank)"}
+            </span>
+          </label>
+        ))}
+        {shown.length === 0 && <p className="px-2 py-3 text-center text-slate-400">No matches</p>}
+      </div>
+      <div className="flex items-center justify-between gap-1 border-t border-slate-100 p-1.5 dark:border-slate-700">
+        <button
+          onClick={() => {
+            onClear();
+            onClose();
+          }}
+          className="rounded px-2 py-1 font-medium text-slate-500 hover:text-red-600 dark:text-slate-400"
+        >
+          Clear
+        </button>
+        <div className="flex gap-1">
+          <button onClick={onClose} className="rounded border border-slate-300 px-2.5 py-1 font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+            Cancel
+          </button>
+          <button onClick={apply} className="rounded bg-brand px-3 py-1 font-semibold text-white hover:bg-brand-dark">
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1342,9 +1414,10 @@ function FlatTable({
   balances,
   currency,
   colFilters,
-  onColFilter,
-  groups,
-  filterRef,
+  facetValues,
+  onApplyFilter,
+  onClearFilter,
+  onSetSort,
   sortKey,
   sortDir,
   onSort,
@@ -1367,10 +1440,11 @@ function FlatTable({
   density: Density;
   balances: Record<string, number>;
   currency: string;
-  colFilters: ColFilters;
-  onColFilter: <K extends keyof ColFilters>(key: K, val: ColFilters[K]) => void;
-  groups: string[];
-  filterRef: React.RefObject<HTMLInputElement>;
+  colFilters: ColumnFilters;
+  facetValues: Record<FilterKey, string[]>;
+  onApplyFilter: (key: FilterKey, next: string[] | null) => void;
+  onClearFilter: (key: FilterKey) => void;
+  onSetSort: (key: SortKey, dir: "asc" | "desc") => void;
   sortKey: SortKey;
   sortDir: "asc" | "desc";
   onSort: (k: SortKey) => void;
@@ -1410,101 +1484,105 @@ function FlatTable({
                   aria-label="Select all on page"
                 />
               </th>
-              <th className="w-9 bg-inherit px-1 py-3" />
-              <SortHeader label="Code" active={sortKey === "code"} dir={sortDir} onClick={() => onSort("code")} className="sticky left-[5rem] z-20 w-28 bg-inherit" />
-              <SortHeader label="Account name" active={sortKey === "name"} dir={sortDir} onClick={() => onSort("name")} className="bg-inherit" />
-              {cols.type && <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onSort("type")} className="w-28 bg-inherit" />}
-              {cols.group && <SortHeader label="Group" active={sortKey === "parent_group"} dir={sortDir} onClick={() => onSort("parent_group")} className="w-44 bg-inherit" />}
+              {/* favourite filter lives on the star column header */}
+              <FilterHead
+                label=""
+                className="w-9 bg-inherit px-1"
+                filterActive={colFilters.favourite !== null}
+                filterCount={colFilters.favourite?.length}
+                filterWidth={200}
+                filterTitle="Filter favourites"
+                renderFilter={(close) => (
+                  <ExcelFilter
+                    values={facetValues.favourite}
+                    selected={colFilters.favourite}
+                    onApply={(n) => onApplyFilter("favourite", n)}
+                    onClear={() => onClearFilter("favourite")}
+                    onClose={close}
+                  />
+                )}
+              />
+              <FilterHead
+                label="Code"
+                className="sticky left-[5rem] z-20 w-28 bg-inherit px-4"
+                sort={{ active: sortKey === "code", dir: sortDir, onClick: () => onSort("code") }}
+                filterActive={colFilters.code !== null}
+                filterCount={colFilters.code?.length}
+                filterWidth={260}
+                filterTitle="Filter code"
+                renderFilter={(close) => (
+                  <ExcelFilter values={facetValues.code} selected={colFilters.code} onApply={(n) => onApplyFilter("code", n)} onClear={() => onClearFilter("code")} onClose={close} onSort={(dir) => onSetSort("code", dir)} />
+                )}
+              />
+              <FilterHead
+                label="Account name"
+                className="bg-inherit px-4"
+                sort={{ active: sortKey === "name", dir: sortDir, onClick: () => onSort("name") }}
+                filterActive={colFilters.name !== null}
+                filterCount={colFilters.name?.length}
+                filterWidth={280}
+                filterTitle="Filter account name"
+                renderFilter={(close) => (
+                  <ExcelFilter values={facetValues.name} selected={colFilters.name} onApply={(n) => onApplyFilter("name", n)} onClear={() => onClearFilter("name")} onClose={close} onSort={(dir) => onSetSort("name", dir)} />
+                )}
+              />
+              {cols.type && (
+                <FilterHead
+                  label="Type"
+                  className="w-28 bg-inherit px-4"
+                  sort={{ active: sortKey === "type", dir: sortDir, onClick: () => onSort("type") }}
+                  filterActive={colFilters.type !== null}
+                  filterCount={colFilters.type?.length}
+                  filterWidth={200}
+                  filterTitle="Filter type"
+                  renderFilter={(close) => (
+                    <ExcelFilter values={facetValues.type} selected={colFilters.type} onApply={(n) => onApplyFilter("type", n)} onClear={() => onClearFilter("type")} onClose={close} onSort={(dir) => onSetSort("type", dir)} />
+                  )}
+                />
+              )}
+              {cols.group && (
+                <FilterHead
+                  label="Group"
+                  className="w-44 bg-inherit px-4"
+                  sort={{ active: sortKey === "parent_group", dir: sortDir, onClick: () => onSort("parent_group") }}
+                  filterActive={colFilters.group !== null}
+                  filterCount={colFilters.group?.length}
+                  filterWidth={240}
+                  filterTitle="Filter group"
+                  renderFilter={(close) => (
+                    <ExcelFilter values={facetValues.group} selected={colFilters.group} onApply={(n) => onApplyFilter("group", n)} onClear={() => onClearFilter("group")} onClose={close} onSort={(dir) => onSetSort("parent_group", dir)} />
+                  )}
+                />
+              )}
               {cols.balance && (
-                <SortHeader
+                <FilterHead
                   label="Debit / Credit"
-                  active={sortKey === "balance"}
-                  dir={sortDir}
-                  onClick={() => onSort("balance")}
-                  className="w-32 whitespace-nowrap bg-inherit"
+                  className="w-32 whitespace-nowrap bg-inherit px-4"
+                  sort={{ active: sortKey === "balance", dir: sortDir, onClick: () => onSort("balance") }}
+                  filterActive={colFilters.balance !== null}
+                  filterCount={colFilters.balance?.length}
+                  filterWidth={200}
+                  filterTitle="Filter debit / credit"
+                  renderFilter={(close) => (
+                    <ExcelFilter values={facetValues.balance} selected={colFilters.balance} onApply={(n) => onApplyFilter("balance", n)} onClear={() => onClearFilter("balance")} onClose={close} onSort={(dir) => onSetSort("balance", dir)} />
+                  )}
                 />
               )}
               {cols.amount && <th className="w-32 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Balance</th>}
-              {cols.status && <th className="w-24 bg-inherit px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Status</th>}
-              <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
-            </tr>
-            {/* filter row — sticky with the header, per-column filters (req 1, 2, 3, 10) */}
-            <tr className="bg-white dark:bg-slate-900">
-              <th className="sticky left-0 z-20 w-11 border-b border-slate-200 bg-inherit px-3 py-1.5 dark:border-slate-800" />
-              <th className="w-9 border-b border-slate-200 bg-inherit px-1 py-1.5 dark:border-slate-800">
-                <FavFilterButton value={colFilters.favourite} onChange={(v) => onColFilter("favourite", v)} />
-              </th>
-              <th className="sticky left-[5rem] z-20 w-28 border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                <TextFilterCell
-                  value={colFilters.code.v}
-                  op={colFilters.code.op}
-                  placeholder="Code…"
-                  inputRef={filterRef}
-                  onValue={(v) => onColFilter("code", { ...colFilters.code, v })}
-                  onOp={(op) => onColFilter("code", { ...colFilters.code, op })}
-                />
-              </th>
-              <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                <TextFilterCell
-                  value={colFilters.name.v}
-                  op={colFilters.name.op}
-                  placeholder="Account name…"
-                  onValue={(v) => onColFilter("name", { ...colFilters.name, v })}
-                  onOp={(op) => onColFilter("name", { ...colFilters.name, op })}
-                />
-              </th>
-              {cols.type && (
-                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                  <SelectFilterCell
-                    value={colFilters.type}
-                    onChange={(v) => onColFilter("type", v as ColFilters["type"])}
-                    options={[
-                      ["", "All types"],
-                      ["asset", "Asset"],
-                      ["liability", "Liability"],
-                      ["income", "Income"],
-                      ["expense", "Expense"],
-                    ]}
-                  />
-                </th>
-              )}
-              {cols.group && (
-                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                  <SelectFilterCell
-                    value={colFilters.group}
-                    onChange={(v) => onColFilter("group", v)}
-                    options={[["", "All groups"], ...groups.map((g) => [g, g] as [string, string])]}
-                  />
-                </th>
-              )}
-              {cols.balance && (
-                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                  <SelectFilterCell
-                    value={colFilters.balance}
-                    onChange={(v) => onColFilter("balance", v as ColFilters["balance"])}
-                    options={[
-                      ["", "All"],
-                      ["debit", "Debit"],
-                      ["credit", "Credit"],
-                    ]}
-                  />
-                </th>
-              )}
-              {cols.amount && <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800" />}
               {cols.status && (
-                <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800">
-                  <SelectFilterCell
-                    value={colFilters.status}
-                    onChange={(v) => onColFilter("status", v as ColFilters["status"])}
-                    options={[
-                      ["", "All"],
-                      ["active", "Active"],
-                      ["inactive", "Inactive"],
-                    ]}
-                  />
-                </th>
+                <FilterHead
+                  label="Status"
+                  className="w-24 bg-inherit px-4"
+                  filterActive={colFilters.status !== null}
+                  filterCount={colFilters.status?.length}
+                  filterWidth={200}
+                  filterTitle="Filter status"
+                  renderFilter={(close) => (
+                    <ExcelFilter values={facetValues.status} selected={colFilters.status} onApply={(n) => onApplyFilter("status", n)} onClear={() => onClearFilter("status")} onClose={close} />
+                  )}
+                />
               )}
-              <th className="border-b border-slate-200 bg-inherit px-2 py-1.5 dark:border-slate-800" />
+              <th className="w-24 bg-inherit px-4 py-3 text-right font-semibold text-slate-600 dark:text-slate-300">Actions</th>
             </tr>
           </thead>
           <tbody>
