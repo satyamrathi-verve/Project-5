@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Icon, type IconName } from "./icons";
+import { getSession, signOut, onAuthChange } from "@/lib/auth";
 
 /*
   Premium collapsible sidebar (app-wide shell).
   Functionality preserved from the original: the SAME routes and the SAME `built`
   gate — unbuilt screens render as a non-navigable "build me" item, built ones as
   real links with active highlighting. Only the presentation changed.
+
+  The footer shows who's signed in and a "Log out" button wired to the app's
+  sign-in gate (see lib/auth + AuthGate): logging out clears the session and drops
+  back to the login screen.
 */
 
 export interface NavLink {
@@ -75,16 +81,16 @@ export function Sidebar({
   onCloseMobile: () => void;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
+  const [name, setName] = useState<string | null>(null);
 
-  const logout = () => {
-    try {
-      ["auth", "gl.session", "session"].forEach((k) => localStorage.removeItem(k));
-    } catch {
-      /* ignore */
-    }
-    router.push("/");
-  };
+  useEffect(() => {
+    const sync = () => setName(getSession()?.name ?? null);
+    sync();
+    return onAuthChange(sync);
+  }, []);
+
+  // Clears the session; AuthGate notices and swaps the app back to the login.
+  const logout = () => signOut();
 
   return (
     <>
@@ -175,8 +181,13 @@ export function Sidebar({
           ))}
         </nav>
 
-        {/* Footer: collapse toggle + logout */}
+        {/* Footer: signed-in user + collapse toggle + logout */}
         <div className="border-t border-white/10 p-3">
+          {!collapsed && name && (
+            <p className="px-3 pb-2 text-[11px] text-slate-500">
+              Signed in as <span className="font-medium text-slate-300">{name}</span>
+            </p>
+          )}
           <button
             type="button"
             onClick={onToggleCollapse}
