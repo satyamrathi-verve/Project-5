@@ -52,6 +52,9 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
 import { AttachmentManager } from "@/components/AttachmentManager";
+import { ActivityCenter } from "@/components/ActivityCenter";
+import { ReasonDialog } from "@/components/ReasonDialog";
+import { logActivity, logActivityBatch } from "@/lib/activity";
 import { csvTemplate, sampleCsv, xlsxTemplate, fileToCsvText, downloadBlob } from "@/lib/import-template";
 
 const PAGE_SIZES = [10, 25, 50, 100];
@@ -76,10 +79,9 @@ type BalanceFilter = "all" | "debit" | "credit";
 type DrawerTab =
   | "general"
   | "transactions"
-  | "history"
   | "attachments"
   | "notes"
-  | "audit"
+  | "activity"
   | "relationships";
 
 interface DrawerState {
@@ -584,17 +586,27 @@ export default function GLMasterPage() {
   const deleteMany = useCallback(
     async (ids: string[]) => {
       if (!supabase || ids.length === 0) return;
+      const targets = accounts.filter((a) => ids.includes(a.id));
       const { error } = await supabase.from("gl_accounts").delete().in("id", ids);
       if (error) {
         flash(`Delete failed: ${error.message}`, "err");
         return;
       }
+      logActivityBatch(
+        targets.map((a) => ({
+          module: "gl",
+          recordId: a.code,
+          context: `${a.code} · ${a.name}`,
+          action: "deleted" as const,
+          oldValue: `${a.code} · ${a.name}`,
+        })),
+      );
       clearSelection();
       setDrawer(null);
       await load();
       flash(`Deleted ${ids.length} account${ids.length === 1 ? "" : "s"}.`);
     },
-    [flash, load],
+    [flash, load, accounts],
   );
 
   const askDelete = (ids: string[], label: string) =>
@@ -917,7 +929,7 @@ export default function GLMasterPage() {
           onEdit={openEdit}
           onCreateSub={openCreateSub}
           onDuplicate={openCopy}
-          onHistory={(a) => openView(a, "history")}
+          onHistory={(a) => openView(a, "activity")}
           onDelete={(a) => askDelete([a.id], a.name)}
           empty={accounts.length === 0 ? "No accounts yet — add your first one." : "No accounts match these filters."}
         />
@@ -1019,10 +1031,18 @@ export default function GLMasterPage() {
           currency={currency}
           onCancel={() => setStatusChange(null)}
           onConfirm={() => {
-            setStatus(statusChange.account.id, statusChange.toInactive);
-            flash(
-              `${statusChange.account.code} · ${statusChange.account.name} set ${statusChange.toInactive ? "inactive" : "active"}.`,
-            );
+            const a = statusChange.account;
+            setStatus(a.id, statusChange.toInactive);
+            logActivity({
+              module: "gl",
+              recordId: a.code,
+              context: `${a.code} · ${a.name}`,
+              action: "status_changed",
+              field: "Status",
+              oldValue: statusChange.toInactive ? "Active" : "Inactive",
+              newValue: statusChange.toInactive ? "Inactive" : "Active",
+            });
+            flash(`${a.code} · ${a.name} set ${statusChange.toInactive ? "inactive" : "active"}.`);
             setStatusChange(null);
           }}
         />
@@ -1119,7 +1139,7 @@ function RowMenu({
     { icon: "plus", label: "Create sub-account", onClick: onCreateSub },
     { icon: "copy", label: "Copy", onClick: onDuplicate },
     { icon: statusActive ? "close" : "check", label: statusActive ? "Set inactive" : "Set active", onClick: onSetStatus },
-    { icon: "clock", label: "History", onClick: onHistory },
+    { icon: "clock", label: "Activity", onClick: onHistory },
     { separator: true },
     { icon: "trash", label: "Delete", danger: true, onClick: onDelete },
   ];
@@ -1787,10 +1807,9 @@ function TableSkeleton() {
 const DRAWER_TABS: { id: DrawerTab; label: string; icon: IconName }[] = [
   { id: "general", label: "General", icon: "book" },
   { id: "transactions", label: "Transactions", icon: "receipt" },
-  { id: "history", label: "History", icon: "clock" },
   { id: "attachments", label: "Attachments", icon: "file" },
   { id: "notes", label: "Notes", icon: "pencil" },
-  { id: "audit", label: "Audit Trail", icon: "scroll" },
+  { id: "activity", label: "Activity Center", icon: "clock" },
   { id: "relationships", label: "Relationships", icon: "grid" },
 ];
 
@@ -1852,6 +1871,7 @@ function AccountDrawer({
   const [codeTouched, setCodeTouched] = useState(false);
   const [errors, setErrors] = useState<ValidationResult["errors"]>(EMPTY_ERRORS);
   const [saving, setSaving] = useState(false);
+  const [reasonOpen, setReasonOpen] = useState(false);
   const [tab, setTab] = useState<DrawerTab>(state.tab ?? "general");
   const [note, setNote] = useState("");
   // Parent account (convenience only — drives type/group/code inheritance; not stored).
@@ -1879,6 +1899,9 @@ function AccountDrawer({
     }
   }, [account?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The note text that was present when the field last gained focus — so we log a
+  // single Activity event on blur instead of one per keystroke.
+  const noteAtFocus = useRef("");
   const saveNote = (v: string) => {
     setNote(v);
     if (!account) return;
@@ -1889,6 +1912,18 @@ function AccountDrawer({
     } catch {
       /* ignore */
     }
+  };
+  const commitNoteActivity = () => {
+    if (!account) return;
+    const before = noteAtFocus.current.trim();
+    const after = note.trim();
+    if (before === after) return;
+    logActivity({
+      module: "gl",
+      recordId: account.code,
+      context: `${account.code} · ${account.name}`,
+      action: after ? (before ? "note_updated" : "note_added") : "note_deleted",
+    });
   };
 
   const onTypeChange = (type: AccountType) => {
@@ -1914,11 +1949,23 @@ function AccountDrawer({
     }
   };
 
-  const save = async () => {
+  // Field-level diff of the edit (drives both the Activity log and the reason prompt).
+  const fieldDiffs: { field: string; old: string; next: string }[] =
+    mode === "edit" && account
+      ? (
+          [
+            { field: "Code", old: account.code, next: form.code.trim() },
+            { field: "Name", old: account.name, next: form.name.trim() },
+            { field: "Type", old: typeLabel(account.type), next: typeLabel(form.type) },
+            { field: "Group", old: account.parent_group ?? "", next: form.parent_group ?? "" },
+          ] as const
+        ).filter((d) => d.old !== d.next)
+      : [];
+
+  // Persist to Supabase, then record the change in the Activity Center.
+  const persist = async (reason: string | null) => {
     if (!supabase) return;
-    const result = validateAccount(form, accounts, { excludeId: mode === "edit" ? account?.id : undefined, allowOverride: override });
-    setErrors(result.errors);
-    if (!result.ok) return;
+    setReasonOpen(false);
     setSaving(true);
     const payload = { code: form.code.trim(), name: form.name.trim(), type: form.type, parent_group: form.parent_group };
     const res =
@@ -1934,7 +1981,36 @@ function AccountDrawer({
       );
       return;
     }
-    await onSaved(mode === "edit" ? `Updated ${payload.code} · ${payload.name}.` : `Created ${payload.code} · ${payload.name}.`);
+    const ctx = `${payload.code} · ${payload.name}`;
+    if (mode === "edit" && account) {
+      logActivityBatch(
+        fieldDiffs.map((d) => ({
+          module: "gl",
+          recordId: payload.code,
+          context: ctx,
+          action: "updated" as const,
+          field: d.field,
+          oldValue: d.old || "—",
+          newValue: d.next || "—",
+          reason,
+        })),
+      );
+    } else {
+      logActivity({ module: "gl", recordId: payload.code, context: ctx, action: "created", newValue: ctx, reason });
+    }
+    await onSaved(mode === "edit" ? `Updated ${ctx}.` : `Created ${ctx}.`);
+  };
+
+  const save = () => {
+    const result = validateAccount(form, accounts, { excludeId: mode === "edit" ? account?.id : undefined, allowOverride: override });
+    setErrors(result.errors);
+    if (!result.ok) return;
+    // Any modification (edited field) goes through the reason confirmation first.
+    if (mode === "edit" && account && fieldDiffs.length > 0) {
+      setReasonOpen(true);
+      return;
+    }
+    void persist(null);
   };
 
   const meta = typeMeta(form.type);
@@ -2028,12 +2104,9 @@ function AccountDrawer({
                   body="GL accounts aren't linked to any transactions in the current schema. Debits, credits and the running balance will appear here once the Journal Entries module posts to this account."
                 />
               )}
-              {tab === "history" && (
-                <GatedTab icon="clock" title="No change history" body="Field-level change history needs a history/versioning table, which the fixed schema doesn't include yet." />
-              )}
               {tab === "attachments" && <AttachmentManager module="gl" recordId={account.code} />}
-              {tab === "audit" && (
-                <GatedTab icon="scroll" title="No audit trail" body="Who-changed-what auditing needs an audit_log table and user identities, which aren't part of the current backend." />
+              {tab === "activity" && (
+                <ActivityCenter module="gl" recordId={account.code} contextLabel={`${account.code} · ${account.name}`} />
               )}
               {tab === "notes" && (
                 <div>
@@ -2043,6 +2116,8 @@ function AccountDrawer({
                   <textarea
                     value={note}
                     onChange={(e) => saveNote(e.target.value)}
+                    onFocus={() => (noteAtFocus.current = note)}
+                    onBlur={commitNoteActivity}
                     rows={8}
                     placeholder="Add a note about this account…"
                     className={`${inputClass} w-full`}
@@ -2192,6 +2267,15 @@ function AccountDrawer({
           )}
         </div>
       </div>
+
+      <ReasonDialog
+        open={reasonOpen}
+        title="Save changes to this account?"
+        message={`${fieldDiffs.length} field${fieldDiffs.length === 1 ? "" : "s"} will change. Add an optional reason for the audit trail.`}
+        confirmLabel="Save changes"
+        onCancel={() => setReasonOpen(false)}
+        onConfirm={(reason) => void persist(reason)}
+      />
     </div>
   );
 }
@@ -2448,6 +2532,15 @@ function ImportModal({
       onError(`Import failed: ${error.message}`);
       return;
     }
+    logActivityBatch(
+      payload.map((p) => ({
+        module: "gl",
+        recordId: p.code,
+        context: `${p.code} · ${p.name}`,
+        action: "imported" as const,
+        newValue: `${p.code} · ${p.name}`,
+      })),
+    );
     await onImported(payload.length);
   };
 

@@ -15,15 +15,16 @@ import { Icon } from "@/components/icons";
 import { formatMoney } from "@/lib/balances";
 import { TXN_STATUS_LABEL, TXN_STATUS_TONE, categoryLabel, formatDate, txnTypeLabel, type CashFlowRow } from "@/lib/cashflow";
 import { AttachmentManager } from "@/components/AttachmentManager";
+import { ActivityCenter } from "@/components/ActivityCenter";
 import { EmptyState, Money } from "./ui";
 
-type Tab = "source" | "gl" | "journal" | "attachments" | "audit";
+type Tab = "source" | "gl" | "journal" | "attachments" | "activity";
 const TABS: { id: Tab; label: string; icon: Parameters<typeof Icon>[0]["name"] }[] = [
   { id: "source", label: "Source", icon: "receipt" },
   { id: "gl", label: "GL Impact", icon: "book" },
   { id: "journal", label: "Journal", icon: "scroll" },
   { id: "attachments", label: "Attachments", icon: "folder" },
-  { id: "audit", label: "Audit Trail", icon: "clock" },
+  { id: "activity", label: "Activity Center", icon: "clock" },
 ];
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -150,8 +151,8 @@ export function DrillDownDrawer({ row, currency, onClose }: { row: CashFlowRow; 
             />
           )}
           {tab === "attachments" && <AttachmentManager module="cashflow" recordId={row.documentNo} />}
-          {tab === "audit" && (
-            <EmptyState icon="clock" title="No audit trail yet" message="Create / post / edit / reverse events are recorded here once transaction workflows exist." />
+          {tab === "activity" && (
+            <ActivityCenter module="cashflow" recordId={row.documentNo} contextLabel={`${row.documentNo} · ${row.description}`} />
           )}
         </div>
       </div>
