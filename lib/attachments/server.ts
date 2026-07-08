@@ -13,6 +13,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { contentTypeFor, extOf, isKnownModule } from "./config";
+import { ATTACHMENTS_DEMO, seedDemoForCode } from "./demo";
 import type {
   AttachmentListResponse,
   AttachmentMeta,
@@ -117,7 +118,34 @@ export function validModule(module: string): boolean {
   return isKnownModule(module) || /^[A-Za-z0-9._-]+$/.test(module);
 }
 
+async function manifestExists(module: string, recordId: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(recordDir(module, recordId), MANIFEST));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lazily seed realistic demo supporting documents the first time a GL account is
+ * opened (only when it has no manifest yet — real uploads always win). Writes
+ * real files + a manifest into the normal storage folder, so the rest of the DMS
+ * treats them like any other attachments. Controlled by ATTACHMENTS_DEMO.
+ */
+async function maybeSeedDemo(module: string, recordId: string): Promise<void> {
+  if (!ATTACHMENTS_DEMO || module !== "gl") return;
+  if (await manifestExists(module, recordId)) return;
+  const seed = await seedDemoForCode(recordId);
+  if (!seed) return;
+  const dir = recordDir(module, recordId);
+  await ensureDir(dir);
+  await Promise.all(seed.files.map((f) => fs.writeFile(path.join(dir, f.storedName), f.buffer)));
+  await writeManifest(module, recordId, seed.manifest);
+}
+
 export async function listRecord(module: string, recordId: string): Promise<AttachmentListResponse> {
+  await maybeSeedDemo(module, recordId);
   return toResponse(await readManifest(module, recordId));
 }
 

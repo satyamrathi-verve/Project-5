@@ -419,7 +419,10 @@ export function AttachmentManager({
                         <div className="flex items-start gap-2.5">
                           <span className={`mt-0.5 grid h-8 w-8 flex-none place-items-center rounded-lg text-[10px] font-bold uppercase ${CATEGORY_BADGE[cat]}`}>{a.ext || "?"}</span>
                           <div className="min-w-0">
-                            <button onClick={() => setDialog({ type: "preview", att: a })} className="block max-w-[220px] truncate text-left font-medium text-slate-800 hover:text-brand hover:underline dark:text-slate-100" title={a.name}>{a.name}</button>
+                            <button onClick={() => setDialog({ type: "preview", att: a })} className="block max-w-[240px] truncate text-left font-medium text-slate-800 hover:text-brand hover:underline dark:text-slate-100" title={a.name}>{a.name}</button>
+                            {a.description && (
+                              <p className="max-w-[240px] truncate text-[11px] text-slate-400 dark:text-slate-500" title={a.description}>{a.description}</p>
+                            )}
                             {a.tags.length > 0 && (
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {a.tags.map((t) => (

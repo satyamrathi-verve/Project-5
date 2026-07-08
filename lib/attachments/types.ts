@@ -25,6 +25,8 @@ export interface AttachmentMeta {
   ext: string;
   contentType: string;
   size: number; // size of the current version
+  /** Short human description of the document (optional). */
+  description?: string | null;
   tags: string[];
   version: number; // current version pointer
   versions: AttachmentVersion[];
