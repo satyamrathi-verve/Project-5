@@ -26,7 +26,7 @@
 */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { Popover, Menu, type MenuItem } from "@/components/overlay";
 import { supabase, isConfigured } from "@/lib/supabase";
 import type { GLAccount } from "@/lib/types";
 import {
@@ -192,70 +192,8 @@ function Btn({
   );
 }
 
-/*
-  Portal-based popover. Renders into document.body so it escapes any ancestor
-  stacking context (sticky toolbar / backdrop-blur) and overflow clipping — the
-  root cause of the Columns menu hiding behind the sticky table header. Position
-  is derived from the anchor's bounding rect and kept aligned on scroll/resize.
-*/
-function Popover({
-  open,
-  anchorRef,
-  onClose,
-  align = "right",
-  width = 192,
-  padded = true,
-  children,
-}: {
-  open: boolean;
-  anchorRef: React.RefObject<HTMLElement | null>;
-  onClose: () => void;
-  align?: "left" | "right";
-  width?: number;
-  padded?: boolean;
-  children: React.ReactNode;
-}) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const update = () => {
-      const el = anchorRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const left = align === "right" ? r.right - width : r.left;
-      setPos({ top: r.bottom + 6, left: Math.min(Math.max(8, left), window.innerWidth - width - 8) });
-    };
-    update();
-    // capture-phase scroll catches scrolling inside the table container too
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, anchorRef, align, width, onClose]);
-
-  if (!open || !pos) return null;
-  return createPortal(
-    <>
-      <div className="fixed inset-0 z-[45]" onClick={onClose} aria-hidden="true" />
-      <div
-        role="menu"
-        className={`fixed z-[46] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${padded ? "p-2" : ""}`}
-        style={{ top: pos.top, left: pos.left, width }}
-      >
-        {children}
-      </div>
-    </>,
-    document.body,
-  );
-}
+// Popover + Menu come from the global overlay system (portal, z-hierarchy,
+// viewport collision, single-open, outside-click, Esc) — see components/overlay.
 
 function Chevron({ open, small }: { open: boolean; small?: boolean }) {
   return (
@@ -844,7 +782,7 @@ export default function GLMasterPage() {
       )}
 
       {/* floating toolbar — global search + flat/grouped view + columns; per-column filters live in the header */}
-      <div className="sticky top-0 z-20 mb-4 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-soft backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+      <div className="sticky top-0 z-[100] mb-4 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-soft backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[14rem] flex-1">
             <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
@@ -1093,7 +1031,7 @@ export default function GLMasterPage() {
       {/* toast */}
       {toast && (
         <div
-          className={`fixed bottom-6 right-6 z-[60] flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-soft animate-fade-in ${
+          className={`fixed bottom-6 right-6 z-[5000] flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-white shadow-soft animate-fade-in ${
             toast.tone === "ok" ? "bg-slate-900 dark:bg-slate-700" : "bg-red-600"
           }`}
         >
@@ -1174,48 +1112,31 @@ function RowMenu({
   onHistory: () => void;
   onDelete: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const items: { icon: IconName; label: string; fn: () => void }[] = [
-    { icon: "eye", label: "View", fn: onView },
-    { icon: "pencil", label: "Edit", fn: onEdit },
-    { icon: "plus", label: "Create sub-account", fn: onCreateSub },
-    { icon: "copy", label: "Copy", fn: onDuplicate },
-    { icon: statusActive ? "close" : "check", label: statusActive ? "Set inactive" : "Set active", fn: onSetStatus },
-    { icon: "clock", label: "History", fn: onHistory },
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const items: MenuItem[] = [
+    { icon: "eye", label: "View", onClick: onView },
+    { icon: "pencil", label: "Edit", onClick: onEdit },
+    { icon: "plus", label: "Create sub-account", onClick: onCreateSub },
+    { icon: "copy", label: "Copy", onClick: onDuplicate },
+    { icon: statusActive ? "close" : "check", label: statusActive ? "Set inactive" : "Set active", onClick: onSetStatus },
+    { icon: "clock", label: "History", onClick: onHistory },
+    { separator: true },
+    { icon: "trash", label: "Delete", danger: true, onClick: onDelete },
   ];
   return (
-    <span className="relative">
-      <IconAction name="dots" label="More actions" onClick={() => setOpen((v) => !v)} />
-      {open && (
-        <>
-          <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <span className="absolute right-0 top-full z-40 mt-1 block w-48 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800">
-            {items.map((it) => (
-              <button
-                key={it.label}
-                onClick={() => {
-                  setOpen(false);
-                  it.fn();
-                }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
-              >
-                <Icon name={it.icon} size={16} />
-                {it.label}
-              </button>
-            ))}
-            <button
-              onClick={() => {
-                setOpen(false);
-                onDelete();
-              }}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10"
-            >
-              <Icon name="trash" size={16} />
-              Delete
-            </button>
-          </span>
-        </>
-      )}
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        title="More actions"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        onClick={(e) => setAnchor((a) => (a ? null : e.currentTarget))}
+        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-brand-light"
+      >
+        <Icon name="dots" size={17} />
+      </button>
+      {anchor && <Menu anchorEl={anchor} items={items} onClose={() => setAnchor(null)} width={200} />}
     </span>
   );
 }
@@ -1485,7 +1406,7 @@ function FlatTable({
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card dark:border-slate-800 dark:bg-slate-900">
       <div className="max-h-[calc(100vh-380px)] overflow-auto">
         <table className="w-full border-separate border-spacing-0 text-sm">
-          <thead className="sticky top-0 z-20 bg-slate-50 text-left dark:bg-slate-800/80">
+          <thead className="sticky top-0 z-[150] bg-slate-50 text-left dark:bg-slate-800/80">
             <tr>
               <th className="sticky left-0 z-20 w-11 bg-inherit px-3 py-3">
                 <input
@@ -2031,7 +1952,7 @@ function AccountDrawer({
   const siblings = account ? accounts.filter((x) => x.parent_group === account.parent_group && x.id !== account.id) : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className="fixed inset-0 z-[4000] flex justify-end">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div className="relative z-10 flex h-full w-full max-w-lg flex-col bg-white shadow-drawer animate-slide-in dark:bg-slate-900">
         {/* header */}
@@ -2310,7 +2231,7 @@ function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onCancel} />
       <div className="relative z-10 w-full max-w-sm rounded-2xl bg-white p-6 shadow-drawer animate-scale-in dark:bg-slate-900">
         <div className="mb-3 grid h-11 w-11 place-items-center rounded-full bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400">
@@ -2383,7 +2304,7 @@ function StatusDialog({
     "mt-3 flex gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200";
 
   return (
-    <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onCancel} />
       <div className="relative z-10 flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-drawer animate-scale-in dark:bg-slate-900">
         <div className="flex-1 overflow-y-auto p-6">
@@ -2531,7 +2452,7 @@ function ImportModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div className="relative z-10 flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl bg-white shadow-drawer animate-scale-in dark:bg-slate-900">
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-800">

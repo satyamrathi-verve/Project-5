@@ -41,7 +41,7 @@ export function DrillDownDrawer({ row, currency, onClose }: { row: CashFlowRow; 
   const amount = row.cashIn || row.cashOut;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+    <div className="fixed inset-0 z-[4000] flex justify-end">
       <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div className="relative flex h-full w-full max-w-md flex-col bg-white shadow-drawer animate-slide-in dark:bg-slate-900">
         {/* header */}

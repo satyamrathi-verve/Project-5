@@ -4,14 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "./icons";
 import { NAV_SECTIONS } from "./Nav";
+import { Popover, Z } from "@/components/overlay";
 
 type MenuId = "search" | "create" | "notif" | "settings";
 
 /*
   App-wide sticky header. The global search is a functional quick-nav palette over
-  the real routes (⌘K / Ctrl-K), not a fake box. Notifications show an honest empty
-  state (there is no notification system yet). Everything here is presentation +
-  navigation — no business logic.
+  the real routes (⌘K / Ctrl-K). Every dropdown (search, create, notifications,
+  settings) renders through the shared overlay Popover — portaled to document.body
+  so the header's backdrop-blur containing block can never clip them.
 */
 export function AppHeader({
   theme,
@@ -26,19 +27,11 @@ export function AppHeader({
   const [menu, setMenu] = useState<MenuId | null>(null);
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const headerRef = useRef<HTMLElement>(null);
 
-  // Close any open dropdown on a click outside the header. (A fixed overlay div
-  // doesn't work here: the header's backdrop-blur makes it the containing block
-  // for fixed children, so an inset-0 layer only covers the header strip.)
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: PointerEvent) => {
-      if (headerRef.current && !headerRef.current.contains(e.target as Node)) setMenu(null);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [menu]);
+  const searchAnchor = useRef<HTMLDivElement>(null);
+  const createAnchor = useRef<HTMLDivElement>(null);
+  const notifAnchor = useRef<HTMLDivElement>(null);
+  const settingsAnchor = useRef<HTMLDivElement>(null);
 
   const allLinks = useMemo(() => NAV_SECTIONS.flatMap((s) => s.links), []);
   const results = useMemo(() => {
@@ -56,8 +49,6 @@ export function AppHeader({
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         openSearch();
-      } else if (e.key === "Escape") {
-        setMenu(null);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -74,7 +65,10 @@ export function AppHeader({
   const toggle = (id: MenuId) => setMenu((m) => (m === id ? null : id));
 
   return (
-    <header ref={headerRef} className="sticky top-0 z-30 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md print:hidden dark:border-slate-800 dark:bg-slate-900/80 sm:px-5">
+    <header
+      style={{ zIndex: Z.stickyHeader }}
+      className="sticky top-0 flex h-16 flex-none items-center gap-2 border-b border-slate-200 bg-white/80 px-3 backdrop-blur-md print:hidden dark:border-slate-800 dark:bg-slate-900/80 sm:px-5"
+    >
       {/* mobile menu */}
       <button
         type="button"
@@ -86,7 +80,7 @@ export function AppHeader({
       </button>
 
       {/* search */}
-      <div className="relative w-full max-w-md">
+      <div ref={searchAnchor} className="relative w-full max-w-md">
         <button
           type="button"
           onClick={openSearch}
@@ -98,45 +92,43 @@ export function AppHeader({
             ⌘K
           </kbd>
         </button>
-        {menu === "search" && (
-          <div className="absolute left-0 top-full z-40 mt-2 w-[22rem] max-w-[90vw] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800">
-            <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 dark:border-slate-700">
-              <Icon name="search" size={16} />
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Jump to a screen…"
-                className="w-full bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
-              />
-            </div>
-            <ul className="max-h-72 overflow-y-auto p-1.5">
-              {results.length === 0 ? (
-                <li className="px-3 py-6 text-center text-sm text-slate-400">No matches.</li>
-              ) : (
-                results.map((l) => (
-                  <li key={l.href}>
-                    <button
-                      type="button"
-                      disabled={!l.built}
-                      onClick={() => go(l.href, l.built)}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-700"
-                    >
-                      <Icon name={l.icon} size={17} />
-                      {l.label}
-                      {!l.built && <span className="ml-auto text-[10px] uppercase text-slate-400">soon</span>}
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
+        <Popover open={menu === "search"} anchorRef={searchAnchor} onClose={() => setMenu(null)} align="left" width={352} padded={false} layer="dropdown">
+          <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 dark:border-slate-700">
+            <Icon name="search" size={16} />
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Jump to a screen…"
+              className="w-full bg-transparent text-sm text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
+            />
           </div>
-        )}
+          <ul className="max-h-72 overflow-y-auto p-1.5">
+            {results.length === 0 ? (
+              <li className="px-3 py-6 text-center text-sm text-slate-400">No matches.</li>
+            ) : (
+              results.map((l) => (
+                <li key={l.href}>
+                  <button
+                    type="button"
+                    disabled={!l.built}
+                    onClick={() => go(l.href, l.built)}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-700"
+                  >
+                    <Icon name={l.icon} size={17} />
+                    {l.label}
+                    {!l.built && <span className="ml-auto text-[10px] uppercase text-slate-400">soon</span>}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+        </Popover>
       </div>
 
       <div className="ml-auto flex items-center gap-1">
         {/* Quick create */}
-        <div className="relative">
+        <div ref={createAnchor} className="relative">
           <button
             type="button"
             onClick={() => toggle("create")}
@@ -145,31 +137,27 @@ export function AppHeader({
             <Icon name="plus" size={18} />
             <span className="hidden sm:inline">Create</span>
           </button>
-          {menu === "create" && (
-            <Dropdown>
-              <MenuItem icon="book" label="New GL Account" onClick={() => go("/masters/gl?new=1", true)} />
-              <MenuItem icon="users" label="New Customer" onClick={() => go("/masters/customers", true)} />
-            </Dropdown>
-          )}
+          <Popover open={menu === "create"} anchorRef={createAnchor} onClose={() => setMenu(null)} align="left" width={224} layer="dropdown">
+            <MenuItem icon="book" label="New GL Account" onClick={() => go("/masters/gl?new=1", true)} />
+            <MenuItem icon="users" label="New Customer" onClick={() => go("/masters/customers", true)} />
+          </Popover>
         </div>
 
         {/* Notifications */}
-        <div className="relative">
+        <div ref={notifAnchor} className="relative">
           <IconAction label="Notifications" onClick={() => toggle("notif")}>
             <span className="relative">
               <Icon name="bell" />
               <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-brand ring-2 ring-white dark:ring-slate-900" />
             </span>
           </IconAction>
-          {menu === "notif" && (
-            <Dropdown align="right" className="w-72">
-              <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Notifications</p>
-              <div className="px-3 py-8 text-center text-sm text-slate-400">
-                <Icon name="check" size={22} className="mx-auto mb-2 text-slate-300" />
-                You&apos;re all caught up.
-              </div>
-            </Dropdown>
-          )}
+          <Popover open={menu === "notif"} anchorRef={notifAnchor} onClose={() => setMenu(null)} align="right" width={288} layer="dropdown">
+            <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">Notifications</p>
+            <div className="px-3 py-8 text-center text-sm text-slate-400">
+              <Icon name="check" size={22} className="mx-auto mb-2 text-slate-300" />
+              You&apos;re all caught up.
+            </div>
+          </Popover>
         </div>
 
         {/* Dark mode */}
@@ -178,40 +166,28 @@ export function AppHeader({
         </IconAction>
 
         {/* Settings */}
-        <div className="relative hidden sm:block">
+        <div ref={settingsAnchor} className="relative hidden sm:block">
           <IconAction label="Settings" onClick={() => toggle("settings")}>
             <Icon name="settings" />
           </IconAction>
-          {menu === "settings" && (
-            <Dropdown align="right">
-              <MenuItem
-                icon={theme === "dark" ? "sun" : "moon"}
-                label={theme === "dark" ? "Light mode" : "Dark mode"}
-                onClick={() => {
-                  onToggleTheme();
-                  setMenu(null);
-                }}
-              />
-              <div className="px-3 py-2 text-xs text-slate-400">More preferences coming soon.</div>
-            </Dropdown>
-          )}
+          <Popover open={menu === "settings"} anchorRef={settingsAnchor} onClose={() => setMenu(null)} align="right" width={224} layer="dropdown">
+            <MenuItem
+              icon={theme === "dark" ? "sun" : "moon"}
+              label={theme === "dark" ? "Light mode" : "Dark mode"}
+              onClick={() => {
+                onToggleTheme();
+                setMenu(null);
+              }}
+            />
+            <div className="px-3 py-2 text-xs text-slate-400">More preferences coming soon.</div>
+          </Popover>
         </div>
-
       </div>
-
     </header>
   );
 }
 
-function IconAction({
-  children,
-  onClick,
-  label,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  label: string;
-}) {
+function IconAction({ children, onClick, label }: { children: React.ReactNode; onClick: () => void; label: string }) {
   return (
     <button
       type="button"
@@ -222,26 +198,6 @@ function IconAction({
     >
       {children}
     </button>
-  );
-}
-
-function Dropdown({
-  children,
-  align = "left",
-  className = "w-56",
-}: {
-  children: React.ReactNode;
-  align?: "left" | "right";
-  className?: string;
-}) {
-  return (
-    <div
-      className={`absolute top-full z-40 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${
-        align === "right" ? "right-0" : "left-0"
-      } ${className}`}
-    >
-      {children}
-    </div>
   );
 }
 

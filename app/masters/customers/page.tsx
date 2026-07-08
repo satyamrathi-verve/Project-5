@@ -507,7 +507,7 @@ export default function CustomerMasterPage() {
       )}
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-slate-900/40 p-4">
           <form
             onSubmit={handleSave}
             noValidate
@@ -679,7 +679,7 @@ export default function CustomerMasterPage() {
       )}
 
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-slate-900/40 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
             <h3 className="mb-2 text-lg font-bold text-slate-900 dark:text-slate-100">Delete customer?</h3>
             <p className="mb-5 text-sm text-slate-600 dark:text-slate-300">

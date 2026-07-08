@@ -429,7 +429,7 @@ export function CashFlowTable({
       {/* table */}
       <div className="max-h-[560px] overflow-auto">
         <table className="w-full border-collapse text-sm">
-          <thead className="sticky top-0 z-10 bg-slate-50 text-xs shadow-sm dark:bg-slate-800/90">
+          <thead className="sticky top-0 z-[150] bg-slate-50 text-xs shadow-sm dark:bg-slate-800/90">
             <tr>
               {visibleCols.map((col) => {
                 const sk = SORTABLE[col.key];

@@ -14,9 +14,10 @@
   and role-based gating (read-only users can only view + download).
 */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
+import { Menu, type MenuItem } from "@/components/overlay";
 import { inputClass } from "./FormField";
 import {
   ACCEPTED_LABELS,
@@ -229,27 +230,27 @@ export function AttachmentManager({
 
   // Build the portal Actions menu for a file (role-gated).
   const buildMenuItems = useCallback(
-    (a: AttachmentMeta): MenuEntry[] => {
-      const view: MenuEntry[] = [
-        { icon: "eye", label: "View", fn: () => setDialog({ type: "preview", att: a }) },
-        { icon: "download", label: "Download", fn: () => void doDownload(a) },
+    (a: AttachmentMeta): MenuItem[] => {
+      const view: MenuItem[] = [
+        { icon: "eye", label: "View", onClick: () => setDialog({ type: "preview", att: a }) },
+        { icon: "download", label: "Download", onClick: () => void doDownload(a) },
       ];
-      const nav: MenuEntry[] = [
-        { icon: "link", label: "Copy File Path", fn: () => void copyPath(a) },
-        { icon: "folder", label: "Open Folder", fn: () => openFolder() },
+      const nav: MenuItem[] = [
+        { icon: "link", label: "Copy File Path", onClick: () => void copyPath(a) },
+        { icon: "folder", label: "Open Folder", onClick: () => openFolder() },
       ];
       if (!writable) return [...view, { separator: true }, ...nav];
       return [
         ...view,
         { separator: true },
-        { icon: "pencil", label: "Rename", fn: () => setDialog({ type: "rename", att: a }) },
-        { icon: "upload", label: "Replace File", fn: () => openReplace(a) },
-        { icon: "copy", label: "Upload New Version", fn: () => openReplace(a) },
-        { icon: "star", label: "Tags", fn: () => setDialog({ type: "tags", att: a }) },
+        { icon: "pencil", label: "Rename", onClick: () => setDialog({ type: "rename", att: a }) },
+        { icon: "upload", label: "Replace File", onClick: () => openReplace(a) },
+        { icon: "copy", label: "Upload New Version", onClick: () => openReplace(a) },
+        { icon: "star", label: "Tags", onClick: () => setDialog({ type: "tags", att: a }) },
         { separator: true },
         ...nav,
         { separator: true },
-        { icon: "trash", label: "Delete", danger: true, fn: () => setDialog({ type: "delete", att: a }) },
+        { icon: "trash", label: "Delete", danger: true, onClick: () => setDialog({ type: "delete", att: a }) },
       ];
     },
     [writable, doDownload, copyPath, openFolder, openReplace],
@@ -464,7 +465,7 @@ export function AttachmentManager({
       )}
 
       {note && (
-        <div className={`fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-soft ${note.tone === "ok" ? "bg-slate-900 dark:bg-slate-700" : "bg-red-600"}`}>{note.msg}</div>
+        <div className={`fixed bottom-6 left-1/2 z-[5000] -translate-x-1/2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-soft ${note.tone === "ok" ? "bg-slate-900 dark:bg-slate-700" : "bg-red-600"}`}>{note.msg}</div>
       )}
 
       {/* dialogs */}
@@ -487,103 +488,10 @@ export function AttachmentManager({
       )}
       {dialog?.type === "history" && <HistoryModal data={data} onClose={() => setDialog(null)} />}
 
-      {/* Portal Actions menu — rendered to document.body so the scrolling table
-          never clips it (viewport-aware: flips up / shifts left; z-index 9999). */}
-      {menu && <ActionMenu anchorEl={menu.anchorEl} items={buildMenuItems(menu.att)} onClose={() => setMenu(null)} />}
+      {/* Portal Actions menu — shared overlay system (never clipped; z-hierarchy,
+          viewport flip/shift, single-open, keyboard nav, Esc). */}
+      {menu && <Menu anchorEl={menu.anchorEl} items={buildMenuItems(menu.att)} onClose={() => setMenu(null)} />}
     </div>
-  );
-}
-
-// ── Portal Actions menu ───────────────────────────────────────────────────────
-
-type MenuEntry = { icon: IconName; label: string; fn: () => void; danger?: boolean } | { separator: true };
-
-function ActionMenu({ anchorEl, items, onClose }: { anchorEl: HTMLElement; items: MenuEntry[]; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const MENU_W = 220;
-
-  const place = useCallback(() => {
-    const el = ref.current;
-    const rect = anchorEl.getBoundingClientRect();
-    const menuH = el?.offsetHeight ?? items.length * 38 + 10;
-    const menuW = el?.offsetWidth ?? MENU_W;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    // right-align to the button, then keep inside the viewport (shift left if needed)
-    let left = rect.right - menuW;
-    left = Math.min(Math.max(8, left), vw - menuW - 8);
-    // open downward, flip up if it would overflow the bottom
-    let top = rect.bottom + 6;
-    if (top + menuH > vh - 8) top = rect.top - menuH - 6;
-    top = Math.min(Math.max(8, top), Math.max(8, vh - menuH - 8));
-    setPos({ top, left });
-  }, [anchorEl, items.length]);
-
-  useLayoutEffect(() => {
-    place();
-  }, [place]);
-
-  useEffect(() => {
-    // focus the first item for keyboard users
-    ref.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
-    const reflow = () => place();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") return onClose();
-      const btns = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
-      if (!btns.length) return;
-      const idx = btns.findIndex((b) => b === document.activeElement);
-      if (e.key === "ArrowDown") { e.preventDefault(); btns[(idx + 1) % btns.length].focus(); }
-      else if (e.key === "ArrowUp") { e.preventDefault(); btns[(idx - 1 + btns.length) % btns.length].focus(); }
-      else if (e.key === "Home") { e.preventDefault(); btns[0].focus(); }
-      else if (e.key === "End") { e.preventDefault(); btns[btns.length - 1].focus(); }
-    };
-    // capture-phase scroll keeps the menu glued to the button inside scroll containers
-    window.addEventListener("scroll", reflow, true);
-    window.addEventListener("resize", reflow);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("scroll", reflow, true);
-      window.removeEventListener("resize", reflow);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [place, onClose]);
-
-  return createPortal(
-    <>
-      <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} aria-hidden="true" />
-      <div
-        ref={ref}
-        role="menu"
-        aria-orientation="vertical"
-        className="fixed w-[220px] overflow-hidden rounded-[10px] border border-slate-200 bg-white p-1 shadow-[0_12px_44px_-8px_rgba(15,23,42,0.4)] animate-scale-in dark:border-slate-700 dark:bg-slate-800"
-        style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999, zIndex: 9999 }}
-      >
-        {items.map((it, i) =>
-          "separator" in it ? (
-            <div key={`sep-${i}`} className="my-1 h-px bg-slate-100 dark:bg-slate-700" />
-          ) : (
-            <button
-              key={it.label}
-              role="menuitem"
-              onClick={() => {
-                onClose();
-                it.fn();
-              }}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors focus:bg-slate-100 dark:focus:bg-slate-700 ${
-                it.danger
-                  ? "text-red-600 hover:bg-red-50 focus:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus:bg-red-500/10"
-                  : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
-              }`}
-            >
-              <Icon name={it.icon} size={16} className="flex-none text-slate-400" />
-              {it.label}
-            </button>
-          ),
-        )}
-      </div>
-    </>,
-    document.body,
   );
 }
 
@@ -627,7 +535,7 @@ function EmptyState({ writable, onUpload }: { writable: boolean; onUpload: () =>
 
 function ModalShell({ children, onClose, wide }: { children: React.ReactNode; onClose: () => void; wide?: boolean }) {
   return createPortal(
-    <div className="fixed inset-0 z-[65] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in" onClick={onClose} />
       <div className={`relative z-10 flex max-h-[88vh] w-full ${wide ? "max-w-3xl" : "max-w-md"} flex-col overflow-hidden rounded-2xl bg-white shadow-drawer animate-scale-in dark:bg-slate-900`}>{children}</div>
     </div>,

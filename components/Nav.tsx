@@ -96,11 +96,11 @@ export function Sidebar({
     <>
       {/* mobile backdrop */}
       {mobileOpen && (
-        <div className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm lg:hidden" onClick={onCloseMobile} />
+        <div className="fixed inset-0 z-[4000] bg-slate-900/50 backdrop-blur-sm lg:hidden" onClick={onCloseMobile} />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-slate-300 shadow-xl transition-[width,transform] duration-200 ease-out print:hidden lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-[4001] flex flex-col bg-gradient-to-b from-slate-900 via-slate-900 to-indigo-950 text-slate-300 shadow-xl transition-[width,transform] duration-200 ease-out print:hidden lg:static lg:z-auto lg:translate-x-0 ${
           collapsed ? "w-[76px]" : "w-64"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >

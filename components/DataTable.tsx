@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Icon } from "./icons";
+import { Popover } from "@/components/overlay";
 
 export interface Column<T> {
   key: string;
@@ -63,17 +64,9 @@ export function DataTable<T extends { id: string }>({
   const [filters, setFilters] = useState<Record<string, Set<string> | undefined>>({});
   const [openFilter, setOpenFilter] = useState<string | null>(null);
   const [optionSearch, setOptionSearch] = useState("");
-  // the header cell whose filter popover is open — clicks outside it close the popover
+  // the header cell whose filter popover is open — used to anchor the portal Popover.
+  // (Outside-click / Esc / single-open are handled by the shared overlay Popover.)
   const openThRef = useRef<HTMLTableCellElement | null>(null);
-
-  useEffect(() => {
-    if (!openFilter) return;
-    const onDown = (e: PointerEvent) => {
-      if (openThRef.current && !openThRef.current.contains(e.target as Node)) setOpenFilter(null);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [openFilter]);
 
   /** Does this row pass every column filter (optionally ignoring one column)? */
   function rowPasses(row: T, exceptKey?: string): boolean {
@@ -221,8 +214,16 @@ export function DataTable<T extends { id: string }>({
                     </button>
                   </span>
 
-                  {openFilter === c.key && (
-                    <div className="absolute left-0 top-full z-10 mt-1 w-56 rounded-lg border border-slate-200 bg-white p-2 font-normal shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                  <Popover
+                    open={openFilter === c.key}
+                    anchorRef={openThRef}
+                    onClose={() => setOpenFilter(null)}
+                    align="left"
+                    width={224}
+                    padded={false}
+                    layer="filterMenu"
+                  >
+                    <div className="p-2 font-normal">
                       <input
                         autoFocus
                         className="mb-2 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 outline-none focus:border-brand focus:ring-1 focus:ring-brand dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
@@ -280,7 +281,7 @@ export function DataTable<T extends { id: string }>({
                         </button>
                       </div>
                     </div>
-                  )}
+                  </Popover>
                 </th>
               );
             })}

@@ -8,8 +8,6 @@
   dark mode). Kept in one file so the views stay declarative.
 */
 
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { Icon, type IconName } from "@/components/icons";
 import { formatMoney } from "@/lib/balances";
 
@@ -82,67 +80,10 @@ export function IconAction({
   );
 }
 
-// ── Portal popover (escapes sticky/overflow clipping — same as GL Master) ─────
-
-export function Popover({
-  open,
-  anchorRef,
-  onClose,
-  align = "right",
-  width = 240,
-  padded = true,
-  children,
-}: {
-  open: boolean;
-  anchorRef: React.RefObject<HTMLElement | null>;
-  onClose: () => void;
-  align?: "left" | "right";
-  width?: number;
-  padded?: boolean;
-  children: React.ReactNode;
-}) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const update = () => {
-      const el = anchorRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const left = align === "right" ? r.right - width : r.left;
-      setPos({ top: r.bottom + 6, left: Math.min(Math.max(8, left), window.innerWidth - width - 8) });
-    };
-    update();
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, anchorRef, align, width, onClose]);
-
-  if (!open || !pos) return null;
-  return createPortal(
-    <>
-      <div className="fixed inset-0 z-[45]" onClick={onClose} aria-hidden="true" />
-      <div
-        role="menu"
-        className={`fixed z-[46] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft animate-scale-in dark:border-slate-700 dark:bg-slate-800 ${
-          padded ? "p-2" : ""
-        }`}
-        style={{ top: pos.top, left: pos.left, width }}
-      >
-        {children}
-      </div>
-    </>,
-    document.body,
-  );
-}
+// Popover now comes from the global overlay system (portal + z-hierarchy +
+// collision + single-open + viewport flip/shift). Re-exported so existing Cash
+// Flow call sites are unchanged (shared default align="right" matches the old one).
+export { Popover } from "@/components/overlay";
 
 // ── Surface card ─────────────────────────────────────────────────────────────
 

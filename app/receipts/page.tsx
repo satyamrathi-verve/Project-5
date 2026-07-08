@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { formatMoney } from "@/lib/balances";
 import { Icon } from "@/components/icons";
+import { Popover } from "@/components/overlay";
 
 /*
   Receipt Entry — record money received from a customer and "knock it off"
@@ -57,18 +58,10 @@ export default function ReceiptEntryPage() {
   type SortKey = "invoice_no" | "due_date" | "total" | "outstanding";
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "due_date", dir: 1 });
   const [filters, setFilters] = useState({ invoice_no: "", due_date: "", total: "", outstanding: "" });
-  // which column's filter popover is open (click the funnel in a header)
+  // which column's filter popover is open (click the funnel in a header).
+  // The shared overlay Popover handles portal/positioning/outside-click/Esc.
   const [openFilter, setOpenFilter] = useState<SortKey | null>(null);
   const openThRef = useRef<HTMLTableCellElement | null>(null);
-
-  useEffect(() => {
-    if (!openFilter) return;
-    const onDown = (e: PointerEvent) => {
-      if (openThRef.current && !openThRef.current.contains(e.target as Node)) setOpenFilter(null);
-    };
-    document.addEventListener("pointerdown", onDown);
-    return () => document.removeEventListener("pointerdown", onDown);
-  }, [openFilter]);
 
   async function loadAll() {
     if (!supabase) return;
@@ -414,8 +407,16 @@ export default function ReceiptEntryPage() {
                                 <Icon name="filter" size={13} />
                               </button>
                             </span>
-                            {openFilter === c.key && (
-                              <div className="absolute left-0 top-full z-10 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                            <Popover
+                              open={openFilter === c.key}
+                              anchorRef={openThRef}
+                              onClose={() => setOpenFilter(null)}
+                              align="left"
+                              width={192}
+                              padded={false}
+                              layer="filterMenu"
+                            >
+                              <div className="p-2">
                                 <input
                                   autoFocus
                                   className={`${inputClass} w-full px-2 py-1 text-xs`}
@@ -444,7 +445,7 @@ export default function ReceiptEntryPage() {
                                   </button>
                                 </div>
                               </div>
-                            )}
+                            </Popover>
                           </th>
                         ))}
                         <th className="w-40 px-4 py-2.5 text-right font-semibold text-slate-600 dark:text-slate-300">
