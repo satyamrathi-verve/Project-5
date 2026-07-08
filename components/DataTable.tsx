@@ -34,10 +34,13 @@ export function DataTable<T extends { id: string }>({
   columns,
   rows,
   empty = "Nothing here yet.",
+  rowClassName,
 }: {
   columns: Column<T>[];
   rows: T[];
   empty?: string;
+  /** Optional per-row classes (e.g. ageing severity tint). Applied on top of the base row styles. */
+  rowClassName?: (row: T) => string;
 }) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
   // key -> set of selected values; a missing key means "no filter" (everything shown)
@@ -241,7 +244,9 @@ export function DataTable<T extends { id: string }>({
             visible.map((row) => (
               <tr
                 key={row.id}
-                className="border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50"
+                className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/50 ${
+                  rowClassName?.(row) ?? ""
+                }`}
               >
                 {columns.map((c) => (
                   <td key={c.key} className={`px-4 py-3 text-slate-700 dark:text-slate-300 ${c.className ?? ""}`}>
