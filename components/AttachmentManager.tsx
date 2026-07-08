@@ -14,7 +14,7 @@
   and role-based gating (read-only users can only view + download).
 */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
 import { inputClass } from "./FormField";
@@ -31,7 +31,6 @@ import {
   validateUpload,
 } from "@/lib/attachments/config";
 import {
-  absoluteFileUrl,
   deleteAttachment,
   downloadAttachment,
   fileUrl,
@@ -97,7 +96,8 @@ export function AttachmentManager({
   const [dialog, setDialog] = useState<Dialog>(null);
   const [dragOver, setDragOver] = useState(false);
   const [note, setNote] = useState<{ msg: string; tone: "ok" | "err" } | null>(null);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Single open Actions menu at a time; anchored to the clicked ⋯ button element.
+  const [menu, setMenu] = useState<{ att: AttachmentMeta; anchorEl: HTMLElement } | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
@@ -193,18 +193,6 @@ export function AttachmentManager({
     [module, recordId, load, flash],
   );
 
-  const copyLink = useCallback(
-    async (att: AttachmentMeta) => {
-      try {
-        await navigator.clipboard.writeText(absoluteFileUrl(module, recordId, att.id));
-        flash("Link copied to clipboard.");
-      } catch {
-        flash("Couldn't copy link.", "err");
-      }
-    },
-    [module, recordId, flash],
-  );
-
   const doDelete = useCallback(
     async (att: AttachmentMeta) => {
       try {
@@ -215,6 +203,56 @@ export function AttachmentManager({
       }
     },
     [module, recordId, flash],
+  );
+
+  const storagePath = data?.storagePath ?? `/storage/attachments/${module}/${recordId}`;
+  const copyPath = useCallback(
+    async (att: AttachmentMeta) => {
+      try {
+        await navigator.clipboard.writeText(`${storagePath}/${att.name}`);
+        flash("File path copied.");
+      } catch {
+        flash("Couldn't copy path.", "err");
+      }
+    },
+    [storagePath, flash],
+  );
+  const openFolder = useCallback(() => {
+    const n = data?.files.length ?? 0;
+    setSearch("");
+    flash(`Opened folder — showing all ${n} file${n === 1 ? "" : "s"}.`);
+  }, [data, flash]);
+  const openReplace = useCallback((att: AttachmentMeta) => {
+    replaceTarget.current = att;
+    replaceInput.current?.click();
+  }, []);
+
+  // Build the portal Actions menu for a file (role-gated).
+  const buildMenuItems = useCallback(
+    (a: AttachmentMeta): MenuEntry[] => {
+      const view: MenuEntry[] = [
+        { icon: "eye", label: "View", fn: () => setDialog({ type: "preview", att: a }) },
+        { icon: "download", label: "Download", fn: () => void doDownload(a) },
+      ];
+      const nav: MenuEntry[] = [
+        { icon: "link", label: "Copy File Path", fn: () => void copyPath(a) },
+        { icon: "folder", label: "Open Folder", fn: () => openFolder() },
+      ];
+      if (!writable) return [...view, { separator: true }, ...nav];
+      return [
+        ...view,
+        { separator: true },
+        { icon: "pencil", label: "Rename", fn: () => setDialog({ type: "rename", att: a }) },
+        { icon: "upload", label: "Replace File", fn: () => openReplace(a) },
+        { icon: "copy", label: "Upload New Version", fn: () => openReplace(a) },
+        { icon: "star", label: "Tags", fn: () => setDialog({ type: "tags", att: a }) },
+        { separator: true },
+        ...nav,
+        { separator: true },
+        { icon: "trash", label: "Delete", danger: true, fn: () => setDialog({ type: "delete", att: a }) },
+      ];
+    },
+    [writable, doDownload, copyPath, openFolder, openReplace],
   );
 
   // ---- derived ------------------------------------------------------------
@@ -403,26 +441,17 @@ export function AttachmentManager({
                         <div className="flex items-center justify-end gap-0.5">
                           <ActionIcon name="eye" label="View" onClick={() => setDialog({ type: "preview", att: a })} />
                           <ActionIcon name="download" label="Download" onClick={() => void doDownload(a)} />
-                          <div className="relative">
-                            <ActionIcon name="dots" label="More" onClick={() => setMenuFor((m) => (m === a.id ? null : a.id))} />
-                            {menuFor === a.id && (
-                              <>
-                                <span className="fixed inset-0 z-20" onClick={() => setMenuFor(null)} />
-                                <div className="absolute right-0 top-8 z-30 w-44 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-soft dark:border-slate-700 dark:bg-slate-800">
-                                  <MenuItem icon="link" label="Copy Link" onClick={() => { setMenuFor(null); void copyLink(a); }} />
-                                  <MenuItem icon="clock" label="Version History" onClick={() => { setMenuFor(null); setDialog({ type: "versions", att: a }); }} />
-                                  {writable && <MenuItem icon="pencil" label="Rename" onClick={() => { setMenuFor(null); setDialog({ type: "rename", att: a }); }} />}
-                                  {writable && <MenuItem icon="upload" label="Replace" onClick={() => { setMenuFor(null); replaceTarget.current = a; replaceInput.current?.click(); }} />}
-                                  {writable && <MenuItem icon="star" label="Tags" onClick={() => { setMenuFor(null); setDialog({ type: "tags", att: a }); }} />}
-                                  {writable && (
-                                    <button onClick={() => { setMenuFor(null); setDialog({ type: "delete", att: a }); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10">
-                                      <Icon name="trash" size={14} /> Delete
-                                    </button>
-                                  )}
-                                </div>
-                              </>
-                            )}
-                          </div>
+                          <button
+                            type="button"
+                            title="More actions"
+                            aria-label="More actions"
+                            aria-haspopup="menu"
+                            aria-expanded={menu?.att.id === a.id}
+                            onClick={(e) => setMenu({ att: a, anchorEl: e.currentTarget })}
+                            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-brand dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-brand-light"
+                          >
+                            <Icon name="dots" size={16} />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -457,7 +486,104 @@ export function AttachmentManager({
           onRestore={async (v) => { try { setData(await restoreAttachmentVersion(module, recordId, dialog.att.id, v)); flash(`Restored v${v}.`); } catch (e) { flash((e as Error).message, "err"); } setDialog(null); }} />
       )}
       {dialog?.type === "history" && <HistoryModal data={data} onClose={() => setDialog(null)} />}
+
+      {/* Portal Actions menu — rendered to document.body so the scrolling table
+          never clips it (viewport-aware: flips up / shifts left; z-index 9999). */}
+      {menu && <ActionMenu anchorEl={menu.anchorEl} items={buildMenuItems(menu.att)} onClose={() => setMenu(null)} />}
     </div>
+  );
+}
+
+// ── Portal Actions menu ───────────────────────────────────────────────────────
+
+type MenuEntry = { icon: IconName; label: string; fn: () => void; danger?: boolean } | { separator: true };
+
+function ActionMenu({ anchorEl, items, onClose }: { anchorEl: HTMLElement; items: MenuEntry[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const MENU_W = 220;
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    const rect = anchorEl.getBoundingClientRect();
+    const menuH = el?.offsetHeight ?? items.length * 38 + 10;
+    const menuW = el?.offsetWidth ?? MENU_W;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // right-align to the button, then keep inside the viewport (shift left if needed)
+    let left = rect.right - menuW;
+    left = Math.min(Math.max(8, left), vw - menuW - 8);
+    // open downward, flip up if it would overflow the bottom
+    let top = rect.bottom + 6;
+    if (top + menuH > vh - 8) top = rect.top - menuH - 6;
+    top = Math.min(Math.max(8, top), Math.max(8, vh - menuH - 8));
+    setPos({ top, left });
+  }, [anchorEl, items.length]);
+
+  useLayoutEffect(() => {
+    place();
+  }, [place]);
+
+  useEffect(() => {
+    // focus the first item for keyboard users
+    ref.current?.querySelector<HTMLButtonElement>("[role='menuitem']")?.focus();
+    const reflow = () => place();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return onClose();
+      const btns = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
+      if (!btns.length) return;
+      const idx = btns.findIndex((b) => b === document.activeElement);
+      if (e.key === "ArrowDown") { e.preventDefault(); btns[(idx + 1) % btns.length].focus(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); btns[(idx - 1 + btns.length) % btns.length].focus(); }
+      else if (e.key === "Home") { e.preventDefault(); btns[0].focus(); }
+      else if (e.key === "End") { e.preventDefault(); btns[btns.length - 1].focus(); }
+    };
+    // capture-phase scroll keeps the menu glued to the button inside scroll containers
+    window.addEventListener("scroll", reflow, true);
+    window.addEventListener("resize", reflow);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("scroll", reflow, true);
+      window.removeEventListener("resize", reflow);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [place, onClose]);
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={onClose} aria-hidden="true" />
+      <div
+        ref={ref}
+        role="menu"
+        aria-orientation="vertical"
+        className="fixed w-[220px] overflow-hidden rounded-[10px] border border-slate-200 bg-white p-1 shadow-[0_12px_44px_-8px_rgba(15,23,42,0.4)] animate-scale-in dark:border-slate-700 dark:bg-slate-800"
+        style={{ top: pos?.top ?? -9999, left: pos?.left ?? -9999, zIndex: 9999 }}
+      >
+        {items.map((it, i) =>
+          "separator" in it ? (
+            <div key={`sep-${i}`} className="my-1 h-px bg-slate-100 dark:bg-slate-700" />
+          ) : (
+            <button
+              key={it.label}
+              role="menuitem"
+              onClick={() => {
+                onClose();
+                it.fn();
+              }}
+              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm outline-none transition-colors focus:bg-slate-100 dark:focus:bg-slate-700 ${
+                it.danger
+                  ? "text-red-600 hover:bg-red-50 focus:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10 dark:focus:bg-red-500/10"
+                  : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+              }`}
+            >
+              <Icon name={it.icon} size={16} className="flex-none text-slate-400" />
+              {it.label}
+            </button>
+          ),
+        )}
+      </div>
+    </>,
+    document.body,
   );
 }
 
@@ -479,14 +605,6 @@ function ActionIcon({ name, label, onClick, danger }: { name: IconName; label: s
     <button type="button" onClick={onClick} title={label} aria-label={label}
       className={`rounded-md p-1.5 transition-colors ${danger ? "text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400" : "text-slate-400 hover:bg-slate-100 hover:text-brand dark:text-slate-500 dark:hover:bg-slate-700 dark:hover:text-brand-light"}`}>
       <Icon name={name} size={16} />
-    </button>
-  );
-}
-
-function MenuItem({ icon, label, onClick }: { icon: IconName; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
-      <Icon name={icon} size={14} /> {label}
     </button>
   );
 }
