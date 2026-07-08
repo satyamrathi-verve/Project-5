@@ -55,6 +55,7 @@ export const NAV_SECTIONS: NavSection[] = [
     heading: "Sales",
     links: [
       { href: "/invoices", label: "Sales Invoices", icon: "file", built: true, moduleKey: "invoices" },
+      { href: "/invoices/print", label: "Invoice Print", icon: "file", built: true, moduleKey: "invoices" },
       { href: "/receipts", label: "Receipt Entry", icon: "receipt", built: true, moduleKey: "receipts" },
       { href: "/upload", label: "Upload Report", icon: "upload", built: true, moduleKey: "upload" },
     ],

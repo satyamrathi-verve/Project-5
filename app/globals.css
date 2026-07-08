@@ -69,4 +69,9 @@ body {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
+  /* Zero the sheet margin so the browser stops stamping the page URL and the
+     "1/1" page number in the corners; documents supply their own margins. */
+  @page {
+    margin: 0;
+  }
 }
