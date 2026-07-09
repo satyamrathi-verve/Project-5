@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import type { Customer, Invoice, ReminderTemplate } from "@/lib/types";
 import { DataTable, type Column } from "@/components/DataTable";
@@ -696,6 +697,12 @@ export default function AutoEmailShootPage() {
         subtitle="One email per overdue customer, covering all their overdue invoices. Click a row to preview."
         action={
           <div className="flex items-center gap-2">
+            <Link
+              href="/reminders/template"
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              Edit template
+            </Link>
             <button
               onClick={() => setView("history")}
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
