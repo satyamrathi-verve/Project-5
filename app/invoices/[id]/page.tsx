@@ -161,6 +161,7 @@ export default function InvoiceViewPage() {
   const [notFound, setNotFound] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false); // Print / Export dropdown
   const [showTaxBreakup, setShowTaxBreakup] = useState(false); // GST breakup expander
+  const [waCopied, setWaCopied] = useState(false); // "message copied" toast for WhatsApp
 
   useEffect(() => {
     if (!supabase || !id) return;
@@ -309,8 +310,10 @@ export default function InvoiceViewPage() {
     : [{ label: `IGST @ ${taxPct}%`, amount: taxTotal }];
 
   /**
-   * Personalised plain-text invoice summary for WhatsApp — every value is pulled
-   * from this invoice (recipient, amounts, tax breakup, due date). No "=" characters.
+   * Personalised plain-text invoice message for WhatsApp — every value is pulled
+   * from this invoice. The full tax breakup rides along in the attached PDF, so the
+   * message itself stays short. (WhatsApp drops shared text when a file is attached,
+   * so sendWhatsApp() also copies this to the clipboard to paste in one keystroke.)
    */
   function invoiceAsText(): string {
     const co = company?.name ?? "Verve Advisory Pvt Ltd";
@@ -324,10 +327,8 @@ export default function InvoiceViewPage() {
     L.push("");
     L.push(greeting);
     L.push("");
-    L.push(`Please find below the tax invoice details for professional advisory services provided by ${co}.`);
+    L.push(`Please find attached the tax invoice PDF for professional advisory services provided by ${co}.`);
     L.push("");
-    L.push(`*Subtotal:* ${formatMoney(subtotalVal)}`);
-    taxLines.forEach((t) => L.push(`*${t.label}:* ${formatMoney(t.amount)}`));
     L.push(`*Invoice Total:* ${formatMoney(total)}`);
     L.push(`*Amount Received:* ${formatMoney(paid)}`);
     L.push(`*Balance Due:* ${formatMoney(outstanding)}`);
@@ -339,7 +340,7 @@ export default function InvoiceViewPage() {
       L.push(`This invoice has been fully settled — thank you for your payment.`);
     }
     L.push("");
-    L.push(`For any billing query, please contact ${email}.`);
+    L.push(`For any billing query, please contact ${email}`);
     L.push("");
     L.push("Thank you,");
     L.push(co);
@@ -348,6 +349,17 @@ export default function InvoiceViewPage() {
 
   async function sendWhatsApp() {
     const text = invoiceAsText();
+
+    // WhatsApp ignores the shared text when a file is attached, so copy the message
+    // to the clipboard first (within the click gesture) — the user pastes it with
+    // one keystroke after picking the chat. Show a hint that it's ready.
+    try {
+      await navigator.clipboard.writeText(text);
+      setWaCopied(true);
+      window.setTimeout(() => setWaCopied(false), 9000);
+    } catch {
+      /* clipboard blocked — the text still goes via the wa.me fallback below */
+    }
 
     // Build the invoice PDF (jsPDF loaded on demand).
     let doc: import("jspdf").jsPDF | null = null;
@@ -438,6 +450,15 @@ export default function InvoiceViewPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
+      {/* "Message copied" toast — WhatsApp can't auto-fill text alongside a file. */}
+      {waCopied && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-lg print:hidden dark:bg-slate-700">
+          <span className="font-semibold">Message copied ✓</span> — after choosing the chat, paste it in the message box with{" "}
+          <kbd className="rounded bg-white/20 px-1.5 py-0.5 font-mono text-xs">Ctrl</kbd>+
+          <kbd className="rounded bg-white/20 px-1.5 py-0.5 font-mono text-xs">V</kbd>. The PDF is already attached.
+        </div>
+      )}
+
       {/* Action bar — never printed. */}
       <div className="mb-6 flex items-center justify-between gap-4 print:hidden">
         <div>
