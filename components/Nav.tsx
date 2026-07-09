@@ -57,7 +57,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/reminders", label: "AR Followup", icon: "mail", built: true },
       { href: "/reminders/template", label: "Reminder Template", icon: "pencil", built: true },
       { href: "/reports/statement", label: "Customer Statement", icon: "scroll", built: true },
-      { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: false },
+      { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: true },
       { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: true },
     ],
   },
