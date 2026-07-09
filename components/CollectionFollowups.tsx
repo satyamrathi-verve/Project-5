@@ -220,12 +220,12 @@ export function CollectionFollowups({ invoiceId }: { invoiceId: string }) {
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-200 bg-slate-50 text-left dark:border-slate-800 dark:bg-slate-800/50">
-              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300 w-32">Date</th>
-              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300 w-48">Activity</th>
-              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300 w-48">Follow-up By</th>
+            <tr className="border-b border-slate-200 bg-slate-50 text-center dark:border-slate-800 dark:bg-slate-800/50">
+              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Date</th>
+              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Activity</th>
+              <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Follow-up By</th>
               <th className="px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Notes</th>
-              <th className="px-4 py-3 w-10" />
+              <th className="px-4 py-3 w-8" />
             </tr>
           </thead>
           <tbody>
@@ -237,10 +237,10 @@ export function CollectionFollowups({ invoiceId }: { invoiceId: string }) {
               </tr>
             ) : (
               rows.map((f) => (
-                <tr key={f.id} className="border-b border-slate-100 last:border-0 align-top dark:border-slate-800">
-                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{fmtDate(f.date)}</td>
-                  <td className="px-4 py-3 text-slate-700 dark:text-slate-300">{f.activity}</td>
-                  <td className="px-4 py-3 text-slate-700 dark:text-slate-300">
+                <tr key={f.id} className="border-b border-slate-100 text-center align-middle last:border-0 dark:border-slate-800">
+                  <td className="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-400">{fmtDate(f.date)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-slate-700 dark:text-slate-300">{f.activity}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-slate-700 dark:text-slate-300">
                     {f.by}
                     {f.source === "auto" && (
                       <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-400">
@@ -249,7 +249,7 @@ export function CollectionFollowups({ invoiceId }: { invoiceId: string }) {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{f.notes || "—"}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-center">
                     {f.source === "manual" && (
                       <button
                         onClick={() => remove(f.id)}
