@@ -32,7 +32,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     heading: "Main",
     links: [
-      { href: "/dashboard", label: "Dashboard", icon: "grid", built: false },
+      { href: "/dashboard", label: "Dashboard", icon: "grid", built: true },
       { href: "/", label: "Home", icon: "home", built: true },
     ],
   },
