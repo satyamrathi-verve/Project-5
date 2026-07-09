@@ -9,6 +9,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { Icon } from "@/components/icons";
 import { buildStatement, downloadStatementPdf } from "@/lib/statement";
+import {
+  classifyReminder,
+  ensureTierTemplates,
+  fillTemplate,
+  tierContent,
+  tierForDays,
+  TIERS,
+  type TierDef,
+} from "@/lib/reminderTemplates";
 
 /*
   AR Followup — Auto Email Shoot.
@@ -44,6 +53,7 @@ import { buildStatement, downloadStatementPdf } from "@/lib/statement";
 const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 const num = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
 const dt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" });
+const dmed = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
 
 /** Don't re-chase anyone reminded within this many days (auto-unticked). */
 const RECENT_DAYS = 3;
@@ -75,6 +85,7 @@ interface CustomerReminder {
   worst_days: number; // oldest invoice's days overdue — drives the ageing tint
   times_reminded: number;
   days_since_reminded: number | null; // null = never chased
+  tier: TierDef; // escalation tier chosen from worst_days
   subject: string;
   body: string;
 }
@@ -96,6 +107,8 @@ interface HistoryRow {
   subject: string | null;
   status: string;
   sent_at: string;
+  tier: { label: string; badge: string }; // what tone this mail was
+  payment: { amount: number; date: string } | null; // first receipt AFTER this mail
 }
 
 /** Ageing bucket → label + tints, matching an AR ageing report. */
@@ -116,22 +129,10 @@ const BUCKETS = [
   { label: "90+ days", dot: "bg-red-600" },
 ];
 
-/** Swap the template placeholders for this customer's real values. */
-function fillTemplate(
-  text: string,
-  vars: { customer: string; amount: string; days_overdue: number; invoice_no: string }
-): string {
-  return text
-    .split("{customer}").join(vars.customer)
-    .split("{amount}").join(vars.amount)
-    .split("{days_overdue}").join(String(vars.days_overdue))
-    .split("{invoice_no}").join(vars.invoice_no);
-}
-
 export default function AutoEmailShootPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [template, setTemplate] = useState<ReminderTemplate | null>(null);
+  const [templates, setTemplates] = useState<ReminderTemplate[]>([]);
   const [reminders, setReminders] = useState<CustomerReminder[]>([]);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -158,23 +159,23 @@ export default function AutoEmailShootPage() {
     setSent(null);
     setPreviewId(null);
 
-    const [tplRes, custRes, invRes, allocRes, logRes] = await Promise.all([
-      supabase.from("reminder_templates").select("*").order("name").limit(1),
+    const [tplRows, custRes, invRes, allocRes, logRes, rcptRes] = await Promise.all([
+      ensureTierTemplates(supabase),
       supabase.from("customers").select("id, name, email"),
       supabase.from("invoices").select("id, invoice_no, customer_id, due_date, total, status"),
       supabase.from("receipt_allocations").select("invoice_id, amount"),
       supabase.from("reminder_log").select("invoice_id, to_email, subject, status, sent_at").order("sent_at", { ascending: false }),
+      supabase.from("receipts").select("customer_id, receipt_date, amount"),
     ]);
 
-    const firstError = tplRes.error || custRes.error || invRes.error || allocRes.error || logRes.error;
+    const firstError = custRes.error || invRes.error || allocRes.error || logRes.error || rcptRes.error;
     if (firstError) {
       setError(firstError.message);
       setLoading(false);
       return;
     }
 
-    const tpl = (tplRes.data?.[0] as ReminderTemplate) ?? null;
-    setTemplate(tpl);
+    setTemplates(tplRows);
 
     // Sum how much has been knocked off each invoice.
     const paidByInvoice = new Map<string, number>();
@@ -212,11 +213,24 @@ export default function AutoEmailShootPage() {
       }
     }
 
+    // Receipts per customer, oldest first — to spot payments that came in AFTER a mail.
+    const receiptsByCustomer = new Map<string, { date: string; amount: number }[]>();
+    for (const r of (rcptRes.data ?? []) as { customer_id: string; receipt_date: string; amount: number }[]) {
+      const arr = receiptsByCustomer.get(r.customer_id) ?? [];
+      arr.push({ date: r.receipt_date, amount: Number(r.amount) });
+      receiptsByCustomer.set(r.customer_id, arr);
+    }
+    for (const arr of receiptsByCustomer.values()) arr.sort((a, b) => (a.date < b.date ? -1 : 1));
+
     // Build the "sent history" view (every logged reminder, newest first).
     setHistory(
       logRows.map((l, i) => {
         const inv = l.invoice_id ? invById.get(l.invoice_id) : undefined;
         const cust = inv ? custById.get(inv.customer_id) : undefined;
+        // Did a payment land AFTER this mail? First receipt on a later calendar day.
+        const sentDay = l.sent_at.slice(0, 10);
+        const laterReceipts = inv ? receiptsByCustomer.get(inv.customer_id) ?? [] : [];
+        const hit = laterReceipts.find((r) => r.date > sentDay) ?? null;
         return {
           id: `${l.invoice_id ?? "x"}-${i}`,
           invoice_no: inv?.invoice_no ?? "—",
@@ -225,6 +239,8 @@ export default function AutoEmailShootPage() {
           subject: l.subject,
           status: l.status,
           sent_at: l.sent_at,
+          tier: classifyReminder(l.subject),
+          payment: hit ? { amount: hit.amount, date: hit.date } : null,
         };
       })
     );
@@ -276,10 +292,12 @@ export default function AutoEmailShootPage() {
         ? Math.floor((now - new Date(group.lastChase).getTime()) / 86_400_000)
         : null;
 
+      // Escalation: pick the tier from the OLDEST overdue invoice, harsher as it ages.
+      const tier = tierForDays(worst);
+      const content = tierContent(tplRows, tier);
       const vars = { customer: customerName, amount: num.format(total), days_overdue: worst, invoice_no: invoiceNos };
-      let body = tpl ? fillTemplate(tpl.body, vars) : "";
-      // The detail lives in the attached account statement, not the body.
-      if (tpl) body += `\n\nAttached: Account Statement — ${customerName}.pdf`;
+      const body =
+        fillTemplate(content.body, vars) + `\n\nAttached: Account Statement — ${customerName}.pdf`;
 
       list.push({
         id: customerId,
@@ -290,7 +308,8 @@ export default function AutoEmailShootPage() {
         worst_days: worst,
         times_reminded: group.chaseCount,
         days_since_reminded: daysSince,
-        subject: tpl ? fillTemplate(tpl.subject, vars) : "",
+        tier,
+        subject: fillTemplate(content.subject, vars),
         body,
       });
     }
@@ -543,6 +562,20 @@ export default function AutoEmailShootPage() {
       render: (r) => <span className={`font-medium ${ageing(r.worst_days).text}`}>{r.worst_days}d</span>,
     },
     {
+      key: "tier",
+      header: "Tone",
+      className: "w-32",
+      value: (r) => r.tier.key,
+      render: (r) => (
+        <span
+          title={`${r.tier.label} — ${r.tier.range}`}
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${r.tier.badge}`}
+        >
+          {r.tier.label}
+        </span>
+      ),
+    },
+    {
       key: "last_chased",
       header: "Last Chased",
       className: "w-32",
@@ -648,7 +681,36 @@ export default function AutoEmailShootPage() {
   /* ---- Sent history view ---- */
   if (view === "history") {
     const historyColumns: Column<HistoryRow>[] = [
-      { key: "sent_at", header: "Sent", className: "w-48", value: (r) => r.sent_at, render: (r) => dt.format(new Date(r.sent_at)) },
+      { key: "sent_at", header: "Sent", className: "w-44", value: (r) => r.sent_at, render: (r) => dt.format(new Date(r.sent_at)) },
+      {
+        key: "payment",
+        header: "Payment since",
+        className: "w-40",
+        value: (r) => (r.payment ? r.payment.date : ""),
+        render: (r) =>
+          r.payment ? (
+            <span
+              title={`Receipt of ${inr.format(r.payment.amount)} on ${dmed.format(new Date(r.payment.date))}, after this reminder`}
+              className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-500/15 dark:text-green-400"
+            >
+              <Icon name="check" size={13} />
+              {inr.format(r.payment.amount)} · {dmed.format(new Date(r.payment.date))}
+            </span>
+          ) : (
+            <span className="text-xs text-slate-400 dark:text-slate-500">No payment yet</span>
+          ),
+      },
+      {
+        key: "tier",
+        header: "Type",
+        className: "w-28",
+        value: (r) => r.tier.label,
+        render: (r) => (
+          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${r.tier.badge}`}>
+            {r.tier.label}
+          </span>
+        ),
+      },
       { key: "customer_name", header: "Customer", className: "font-medium" },
       { key: "invoice_no", header: "Invoice", className: "w-28" },
       { key: "to_email", header: "Email", render: (r) => r.to_email ?? <span className="text-slate-400">—</span> },
@@ -701,7 +763,7 @@ export default function AutoEmailShootPage() {
               href="/reminders/template"
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
-              Edit template
+              Edit templates
             </Link>
             <button
               onClick={() => setView("history")}
@@ -711,7 +773,7 @@ export default function AutoEmailShootPage() {
             </button>
             <button
               onClick={sendAll}
-              disabled={sending || selected.size === 0 || !template}
+              disabled={sending || selected.size === 0}
               className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
             >
               {sending ? "Sending…" : `Send ${selected.size} email${selected.size === 1 ? "" : "s"}`}
@@ -726,9 +788,18 @@ export default function AutoEmailShootPage() {
         </div>
       )}
 
-      {!loading && !template && (
-        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          No reminder template found. Add one to the <code className="rounded bg-amber-100 px-1">reminder_templates</code> table first.
+      {/* Escalation legend — which tone each overdue age gets */}
+      {!loading && reminders.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs dark:border-slate-800 dark:bg-slate-900">
+          <span className="font-medium text-slate-500 dark:text-slate-400">
+            Tone escalates with age — each customer gets the tier for their oldest overdue invoice:
+          </span>
+          {TIERS.map((t) => (
+            <span key={t.key} className="inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+              <span className={`h-2.5 w-2.5 rounded-full ${t.dot}`} />
+              <span className="font-medium text-slate-700 dark:text-slate-200">{t.label}</span> {t.range}
+            </span>
+          ))}
         </div>
       )}
 
@@ -805,9 +876,17 @@ export default function AutoEmailShootPage() {
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
           <div className="mb-3 flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                Email preview
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Email preview
+                </h3>
+                <span
+                  title={`Auto-selected from ${preview.worst_days} days overdue (${preview.tier.range})`}
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${preview.tier.badge}`}
+                >
+                  {preview.tier.label} tone
+                </span>
+              </div>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                 To:{" "}
                 <span className="font-medium text-slate-700 dark:text-slate-200">
