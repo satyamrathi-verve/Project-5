@@ -68,6 +68,7 @@ export default function InvoicesPage() {
 
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | InvoiceStatus>("all");
+  const [dueDate, setDueDate] = useState(""); // ISO yyyy-mm-dd; "" = no due-date filter
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -154,7 +155,8 @@ export default function InvoicesPage() {
         r.invoice_no.toLowerCase().includes(q) ||
         (r.customers?.name ?? "").toLowerCase().includes(q) ||
         (r.customers?.code ?? "").toLowerCase().includes(q);
-      return matchesStatus && matchesSearch;
+      const matchesDue = !dueDate || (r.due_date ?? "").slice(0, 10) === dueDate;
+      return matchesStatus && matchesSearch && matchesDue;
     });
 
     out = [...out].sort((a, b) => {
@@ -177,18 +179,7 @@ export default function InvoicesPage() {
     });
 
     return out;
-  }, [rows, search, status, sortKey, sortDir]);
-
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setSortDir(key === "customer" ? "asc" : "desc");
-    }
-  }
-
-  const sortArrow = (key: SortKey) =>
-    sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+  }, [rows, search, status, dueDate, sortKey, sortDir]);
 
   function exportCsv() {
     const header = [
@@ -241,6 +232,8 @@ export default function InvoicesPage() {
     {
       key: "customer",
       header: "Customer",
+      // Drives the header sort + Excel-style value filter for this column.
+      value: (r) => r.customers?.name ?? "—",
       render: (r) => (
         <div>
           <div className="font-medium text-slate-800 dark:text-slate-100">{r.customers?.name ?? "—"}</div>
@@ -283,6 +276,8 @@ export default function InvoicesPage() {
     {
       key: "status",
       header: "Status",
+      // Filter/sort by the *effective* status so "overdue" is selectable in the header filter.
+      value: (r) => r.effectiveStatus,
       render: (r) => <StatusBadge status={r.effectiveStatus} />,
     },
   ];
@@ -333,15 +328,38 @@ export default function InvoicesPage() {
 
           {/* Filter bar */}
           <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-            <div className="w-full max-w-xs">
-              <FormField label="Search">
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Invoice no. or customer…"
-                  className={inputClass}
-                />
-              </FormField>
+            <div className="flex items-end gap-3">
+              <div className="w-56">
+                <FormField label="Search">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Invoice no. or customer…"
+                    className={`${inputClass} w-full`}
+                  />
+                </FormField>
+              </div>
+              <div>
+                <FormField label="Due date">
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="date"
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                      className={inputClass}
+                    />
+                    {dueDate && (
+                      <button
+                        onClick={() => setDueDate("")}
+                        title="Clear due-date filter"
+                        className="rounded px-2 py-2 text-sm text-slate-400 hover:text-red-600"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </FormField>
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -366,30 +384,6 @@ export default function InvoicesPage() {
                 );
               })}
             </div>
-          </div>
-
-          {/* Sort controls */}
-          <div className="mb-3 flex items-center gap-1 text-xs text-slate-500">
-            <span className="mr-1">Sort:</span>
-            {(
-              [
-                ["date", "Date"],
-                ["customer", "Customer"],
-                ["total", "Total"],
-                ["outstanding", "Outstanding"],
-              ] as [SortKey, string][]
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => toggleSort(key)}
-                className={`rounded px-2 py-1 font-medium hover:bg-slate-100 ${
-                  sortKey === key ? "text-brand" : "text-slate-500"
-                }`}
-              >
-                {label}
-                {sortArrow(key)}
-              </button>
-            ))}
           </div>
 
           {/* Table / states */}
