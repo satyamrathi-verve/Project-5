@@ -1,18 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, isConfigured } from "@/lib/supabase";
 import type { Invoice, InvoiceStatus } from "@/lib/types";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
-import { DataTable, type Column } from "@/components/DataTable";
+import { DataTable, type Column, type DataTableHandle } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
-import { FormField, inputClass } from "@/components/FormField";
 
 /*
-  Sales Invoice — List. Every invoice in one table with a search box, a status
-  filter, summary tiles, sorting and CSV export. Overdue invoices are painted red.
+  Sales Invoice — List. Every invoice in one table with a status filter, summary
+  tiles, sorting and CSV export. Overdue invoices are painted red.
 
   Data notes:
   - invoices only store customer_id, so we join the customer name in one query.
@@ -66,11 +65,11 @@ export default function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"all" | InvoiceStatus>("all");
-  const [dueDate, setDueDate] = useState(""); // ISO yyyy-mm-dd; "" = no due-date filter
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [columnFiltersActive, setColumnFiltersActive] = useState(false);
+  const tableRef = useRef<DataTableHandle>(null);
 
   async function load() {
     if (!supabase) return;
@@ -147,17 +146,7 @@ export default function InvoicesPage() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let out = rows.filter((r) => {
-      const matchesStatus = status === "all" || r.effectiveStatus === status;
-      const matchesSearch =
-        !q ||
-        r.invoice_no.toLowerCase().includes(q) ||
-        (r.customers?.name ?? "").toLowerCase().includes(q) ||
-        (r.customers?.code ?? "").toLowerCase().includes(q);
-      const matchesDue = !dueDate || (r.due_date ?? "").slice(0, 10) === dueDate;
-      return matchesStatus && matchesSearch && matchesDue;
-    });
+    let out = rows.filter((r) => status === "all" || r.effectiveStatus === status);
 
     out = [...out].sort((a, b) => {
       let cmp = 0;
@@ -179,13 +168,14 @@ export default function InvoicesPage() {
     });
 
     return out;
-  }, [rows, search, status, dueDate, sortKey, sortDir]);
+  }, [rows, status, sortKey, sortDir]);
 
   function exportCsv() {
     const header = [
       "Invoice No",
       "Date",
       "Customer",
+      "Cust ID",
       "Due Date",
       "Total",
       "Outstanding",
@@ -196,6 +186,7 @@ export default function InvoicesPage() {
         r.invoice_no,
         r.invoice_date,
         r.customers?.name ?? "",
+        r.customers?.code ?? "",
         r.due_date,
         r.total,
         r.outstanding,
@@ -230,20 +221,6 @@ export default function InvoicesPage() {
     },
     { key: "invoice_date", header: "Date", render: (r) => fmtDate(r.invoice_date) },
     {
-      key: "customer",
-      header: "Customer",
-      // Drives the header sort + Excel-style value filter for this column.
-      value: (r) => r.customers?.name ?? "—",
-      render: (r) => (
-        <div>
-          <div className="font-medium text-slate-800 dark:text-slate-100">{r.customers?.name ?? "—"}</div>
-          {r.customers?.code && (
-            <div className="text-xs text-slate-400 dark:text-slate-500">{r.customers.code}</div>
-          )}
-        </div>
-      ),
-    },
-    {
       key: "due_date",
       header: "Due",
       render: (r) => (
@@ -255,6 +232,23 @@ export default function InvoicesPage() {
             </div>
           )}
         </div>
+      ),
+    },
+    {
+      key: "custId",
+      header: "Cust ID",
+      value: (r) => r.customers?.code ?? "",
+      render: (r) => (
+        <span className="text-slate-500 dark:text-slate-400">{r.customers?.code ?? "—"}</span>
+      ),
+    },
+    {
+      key: "customer",
+      header: "Customer",
+      // Drives the header sort + Excel-style value filter for this column.
+      value: (r) => r.customers?.name ?? "—",
+      render: (r) => (
+        <div className="font-medium text-slate-800 dark:text-slate-100">{r.customers?.name ?? "—"}</div>
       ),
     },
     {
@@ -286,7 +280,7 @@ export default function InvoicesPage() {
     <>
       <PageHeader
         title="Sales Invoices"
-        subtitle="Every invoice — search, filter by status, and track what's outstanding."
+        subtitle="Every invoice — filter by status, and track what's outstanding."
         action={
           <div className="flex gap-2">
             <button
@@ -328,39 +322,16 @@ export default function InvoicesPage() {
 
           {/* Filter bar */}
           <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-            <div className="flex items-end gap-3">
-              <div className="w-56">
-                <FormField label="Search">
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Invoice no. or customer…"
-                    className={`${inputClass} w-full`}
-                  />
-                </FormField>
-              </div>
-              <div>
-                <FormField label="Due date">
-                  <div className="flex items-center gap-1">
-                    <input
-                      type="date"
-                      value={dueDate}
-                      onChange={(e) => setDueDate(e.target.value)}
-                      className={inputClass}
-                    />
-                    {dueDate && (
-                      <button
-                        onClick={() => setDueDate("")}
-                        title="Clear due-date filter"
-                        className="rounded px-2 py-2 text-sm text-slate-400 hover:text-red-600"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                </FormField>
-              </div>
-            </div>
+            <button
+              onClick={() => {
+                setStatus("all");
+                tableRef.current?.clearFilters();
+              }}
+              disabled={status === "all" && !columnFiltersActive}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+            >
+              Clear filter
+            </button>
 
             <div className="flex flex-wrap gap-2">
               {STATUS_FILTERS.map((f) => {
@@ -404,14 +375,16 @@ export default function InvoicesPage() {
             </div>
           ) : (
             <DataTable
+              ref={tableRef}
               columns={columns}
               rows={filtered}
               empty={
                 rows.length === 0
                   ? "No invoices in the database yet."
-                  : "No invoices match your search or filter."
+                  : "No invoices match this filter."
               }
               rowClassName={(r) => (r.effectiveStatus === "overdue" ? "bg-red-50 dark:bg-red-950/40" : "")}
+              onActiveFiltersChange={setColumnFiltersActive}
             />
           )}
         </>

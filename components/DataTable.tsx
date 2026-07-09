@@ -1,6 +1,15 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { Icon } from "./icons";
 import { Popover } from "@/components/overlay";
 
@@ -24,27 +33,12 @@ function rawValue<T>(col: Column<T>, row: T): string | number {
 
 const BLANK_LABEL = "(Blanks)";
 
-/*
-  A plain, reusable table. Copy this pattern for every list screen (invoices,
-  receipts, GL accounts…). Pass your columns and rows; it handles the empty state.
-  Excel-style out of the box: click a header to sort (the ⇅ badge is always
-  visible), click the funnel for a checkbox list of that column's values — and
-  each list only offers values still possible under the other columns' filters.
+/** Imperative handle for parent screens that want an external "clear filters" control. */
+export interface DataTableHandle {
+  clearFilters: () => void;
+}
 
-  Row selection is opt-in: pass `selectable` plus `selectedIds`/`onSelectionChange`
-  to get a leading checkbox column (used by Customer Master's multi-delete). Screens
-  that don't pass it get no checkbox column, so nothing else changes.
-*/
-export function DataTable<T extends { id: string }>({
-  columns,
-  rows,
-  empty = "Nothing here yet.",
-  rowClassName,
-  onRowClick,
-  selectable = false,
-  selectedIds = [],
-  onSelectionChange,
-}: {
+interface DataTableProps<T> {
   columns: Column<T>[];
   rows: T[];
   empty?: string;
@@ -58,7 +52,38 @@ export function DataTable<T extends { id: string }>({
   selectedIds?: string[];
   /** Called with the new selection whenever a checkbox is toggled. */
   onSelectionChange?: (ids: string[]) => void;
-}) {
+  /** Called whenever any column header filter becomes active/inactive. */
+  onActiveFiltersChange?: (active: boolean) => void;
+}
+
+/*
+  A plain, reusable table. Copy this pattern for every list screen (invoices,
+  receipts, GL accounts…). Pass your columns and rows; it handles the empty state.
+  Excel-style out of the box: click a header to sort (the ⇅ badge is always
+  visible), click the funnel for a checkbox list of that column's values — and
+  each list only offers values still possible under the other columns' filters.
+
+  Row selection is opt-in: pass `selectable` plus `selectedIds`/`onSelectionChange`
+  to get a leading checkbox column (used by Customer Master's multi-delete). Screens
+  that don't pass it get no checkbox column, so nothing else changes.
+
+  Pass a ref to imperatively clear header-column filters (e.g. from a page-level
+  "Clear filter" button) via `ref.current.clearFilters()`.
+*/
+function DataTableInner<T extends { id: string }>(
+  {
+    columns,
+    rows,
+    empty = "Nothing here yet.",
+    rowClassName,
+    onRowClick,
+    selectable = false,
+    selectedIds = [],
+    onSelectionChange,
+    onActiveFiltersChange,
+  }: DataTableProps<T>,
+  ref: Ref<DataTableHandle>
+) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null);
   // key -> set of selected values; a missing key means "no filter" (everything shown)
   const [filters, setFilters] = useState<Record<string, Set<string> | undefined>>({});
@@ -67,6 +92,13 @@ export function DataTable<T extends { id: string }>({
   // the header cell whose filter popover is open — used to anchor the portal Popover.
   // (Outside-click / Esc / single-open are handled by the shared overlay Popover.)
   const openThRef = useRef<HTMLTableCellElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    clearFilters: () => {
+      setFilters({});
+      setOpenFilter(null);
+    },
+  }));
 
   /** Does this row pass every column filter (optionally ignoring one column)? */
   function rowPasses(row: T, exceptKey?: string): boolean {
@@ -117,6 +149,11 @@ export function DataTable<T extends { id: string }>({
   }
 
   const anyFilterActive = Object.values(filters).some(Boolean);
+
+  useEffect(() => {
+    onActiveFiltersChange?.(anyFilterActive);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anyFilterActive]);
 
   // Selection works over the currently visible (filtered/sorted) rows.
   const visibleIds = visible.map((r) => r.id);
@@ -327,3 +364,7 @@ export function DataTable<T extends { id: string }>({
     </div>
   );
 }
+
+export const DataTable = forwardRef(DataTableInner) as <T extends { id: string }>(
+  props: DataTableProps<T> & { ref?: Ref<DataTableHandle> }
+) => ReturnType<typeof DataTableInner>;
