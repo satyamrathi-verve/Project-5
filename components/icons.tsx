@@ -39,7 +39,12 @@ export type IconName =
   | "download"
   | "star"
   | "folder"
-  | "link";
+  | "link"
+  | "shield"
+  | "key"
+  | "camera"
+  | "phone"
+  | "eyeOff";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   grid: (
@@ -135,6 +140,26 @@ const PATHS: Record<IconName, React.ReactNode> = {
   star: <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />,
   folder: <path d="M3 7a2 2 0 0 1 2-2h3.4l1.6 1.8H19a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   link: <path d="M9.5 14.5l5-5M10.5 6.8l1-1a3.5 3.5 0 0 1 5 5l-1 1M13.5 17.2l-1 1a3.5 3.5 0 0 1-5-5l1-1" />,
+  shield: <path d="M12 3l8 3v6c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z" />,
+  key: (
+    <>
+      <circle cx="8" cy="14" r="4" />
+      <path d="M11 11l9-9M17 5l3 3M14 8l2.5 2.5" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13.5" r="3.5" />
+    </>
+  ),
+  phone: <path d="M6.5 3h3l1.5 4-2 1.5a12 12 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2.2 2 18 18 0 0 1-15.3-15.3A2 2 0 0 1 6.5 3z" />,
+  eyeOff: (
+    <>
+      <path d="M3 3l18 18M9.9 5.2A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.3 4.3M6.5 6.6C3.8 8.3 2 12 2 12s3.5 7 10 7a10.4 10.4 0 0 0 4-.8" />
+      <path d="M9.9 14.1A3.5 3.5 0 0 1 9.5 12a3.5 3.5 0 0 1 3.5-3.5c.8 0 1.5.3 2.1.8" />
+    </>
+  ),
 };
 
 export function Icon({

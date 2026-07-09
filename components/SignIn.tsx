@@ -19,11 +19,11 @@ export function SignIn() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const res = signIn(email, password);
+    const res = await signIn(email, password);
     if (!res.ok) {
       setError(res.error);
       setBusy(false);

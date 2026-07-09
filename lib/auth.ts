@@ -1,16 +1,14 @@
 /*
   Front-end-only sign in (see CLAUDE.md rule 1). There is NO auth backend and NO
-  `users` table — logins are checked against the small demo list below, and the
-  session is kept in localStorage. Every screen sits behind <AuthGate>, which reads
-  this session; Nav's "Sign out" button clears it.
+  `users` table in Supabase — logins are checked against the local Users & Access
+  store (lib/users/store.ts, localStorage-backed, seeded with one Administrator
+  so the event's known demo login keeps working), and the session itself is kept
+  in localStorage. Every screen sits behind <AuthGate>, which reads this session
+  (and, via lib/users, the signed-in user's role/permissions); Nav's "Sign out"
+  button clears it.
 */
 
-export type DemoUser = { username: string; password: string; name: string };
-
-/** The only accepted logins. Edit this list to add teammates (keep emails lowercase). */
-export const DEMO_USERS: DemoUser[] = [
-  { username: "arhandle@verveadvisory.com", password: "Verve@321", name: "AR Handle" },
-];
+import { authenticate } from "@/lib/users/store";
 
 export type Session = { username: string; name: string };
 
@@ -28,16 +26,12 @@ export function getSession(): Session | null {
   }
 }
 
-/** Check credentials against the demo list; store the session on success. */
-export function signIn(
-  username: string,
-  password: string
-): { ok: true } | { ok: false; error: string } {
-  const u = username.trim().toLowerCase();
-  const match = DEMO_USERS.find((d) => d.username === u && d.password === password);
-  if (!match) return { ok: false, error: "Wrong username or password." };
+/** Check credentials against the Users & Access store; store the session on success. */
+export async function signIn(username: string, password: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await authenticate(username, password);
+  if (!res.ok) return { ok: false, error: res.error };
 
-  const session: Session = { username: match.username, name: match.name };
+  const session: Session = { username: res.user.username, name: res.user.fullName };
   window.localStorage.setItem(KEY, JSON.stringify(session));
   window.dispatchEvent(new Event(EVENT));
   return { ok: true };

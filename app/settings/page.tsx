@@ -30,9 +30,25 @@ import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
 import { Icon, type IconName } from "@/components/icons";
 import { Switch } from "@/components/Switch";
-import { DEMO_USERS, getSession, signOut } from "@/lib/auth";
+import { getSession, signOut } from "@/lib/auth";
 import { getTheme, setTheme, onThemeChange, type Theme } from "@/lib/theme";
 import { NAV_SECTIONS } from "@/components/Nav";
+import {
+  getAllUsers,
+  setStatus as setUserStatus,
+  deleteUser,
+  defaultPermissionsForRole,
+  moduleLabel,
+  ROLE_DEFS,
+  onUsersChange,
+  type PublicUser,
+} from "@/lib/users";
+import { UserFormModal } from "@/components/users/UserFormModal";
+import { ResetPasswordModal } from "@/components/users/ResetPasswordModal";
+import { ChangeRoleModal } from "@/components/users/ChangeRoleModal";
+import { ViewProfileModal } from "@/components/users/ViewProfileModal";
+import { UserTable } from "@/components/users/UserTable";
+import { AuditList } from "@/components/users/AuditList";
 import {
   getSettings,
   saveSettings,
@@ -465,14 +481,6 @@ function CompanyInfoCard({ flash }: { flash: (msg: string, tone?: "ok" | "err") 
 // Users & Access
 // ===========================================================================
 
-const PERMISSION_ROWS = [
-  { area: "Masters (Customers, GL)", access: "Full access" },
-  { area: "Sales Invoices & Receipts", access: "Full access" },
-  { area: "AR Followup & Reminders", access: "Full access" },
-  { area: "Reports (Statement, Ageing, Cash Flow)", access: "View & export" },
-  { area: "Settings", access: "Full access" },
-];
-
 function parseUserAgent(ua: string): { browser: string; os: string } {
   const os = /Windows/.test(ua)
     ? "Windows"
@@ -497,68 +505,114 @@ function parseUserAgent(ua: string): { browser: string; os: string } {
   return { browser, os };
 }
 
+type AccessModal =
+  | { type: "create" }
+  | { type: "edit"; user: PublicUser }
+  | { type: "view"; user: PublicUser }
+  | { type: "resetPassword"; user: PublicUser }
+  | { type: "changeRole"; user: PublicUser }
+  | { type: "delete"; user: PublicUser }
+  | null;
+
 function AccessTab({ flash }: { flash: (msg: string, tone?: "ok" | "err") => void }) {
   const session = getSession();
+  const performedBy = session?.name ?? "Unknown";
   const [device, setDevice] = useState<{ browser: string; os: string } | null>(null);
+  const [users, setUsers] = useState<PublicUser[]>([]);
+  const [modal, setModal] = useState<AccessModal>(null);
+  const [roleRefOpen, setRoleRefOpen] = useState(false);
+
+  const refreshUsers = useCallback(() => {
+    void getAllUsers().then((list) => setUsers(list.sort((a, b) => a.fullName.localeCompare(b.fullName))));
+  }, []);
+
   useEffect(() => {
     if (typeof navigator !== "undefined") setDevice(parseUserAgent(navigator.userAgent));
-  }, []);
+    refreshUsers();
+    return onUsersChange(refreshUsers);
+  }, [refreshUsers]);
+
+  const toggleStatus = async (u: PublicUser) => {
+    const next = u.status === "active" ? "inactive" : "active";
+    const res = await setUserStatus(u.id, next, performedBy);
+    if (!res.ok) return flash(res.error, "err");
+    flash(`${u.fullName} is now ${next}.`);
+  };
+
+  const confirmDelete = async (u: PublicUser) => {
+    const res = await deleteUser(u.id, performedBy);
+    setModal(null);
+    if (!res.ok) return flash(res.error, "err");
+    flash(`${u.fullName} was deleted.`);
+  };
 
   return (
     <div className="space-y-4">
       <Card
         title="User Management"
-        subtitle="Sign-in uses a fixed demo login list for this event — not a database of users."
+        subtitle={`${users.length} user${users.length === 1 ? "" : "s"} · credentials, roles and permissions are created here and work immediately on the sign-in page.`}
         action={
-          <Btn disabled icon="plus">
+          <Btn variant="primary" icon="plus" onClick={() => setModal({ type: "create" })}>
             Add User
           </Btn>
         }
       >
-        <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs dark:bg-slate-800/60">
-              <tr className="text-left text-slate-500 dark:text-slate-400">
-                <th className="px-3 py-2.5 font-semibold">Name</th>
-                <th className="px-3 py-2.5 font-semibold">Username</th>
-                <th className="px-3 py-2.5 font-semibold">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {DEMO_USERS.map((u) => (
-                <tr key={u.username} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2.5 font-medium text-slate-700 dark:text-slate-200">{u.name}</td>
-                  <td className="px-3 py-2.5 text-slate-500 dark:text-slate-400">{u.username}</td>
-                  <td className="px-3 py-2.5">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Active
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <UserTable
+          users={users}
+          currentUsername={session?.username ?? ""}
+          onView={(u) => setModal({ type: "view", user: u })}
+          onEdit={(u) => setModal({ type: "edit", user: u })}
+          onResetPassword={(u) => setModal({ type: "resetPassword", user: u })}
+          onChangeRole={(u) => setModal({ type: "changeRole", user: u })}
+          onToggleStatus={(u) => void toggleStatus(u)}
+          onDelete={(u) => setModal({ type: "delete", user: u })}
+        />
       </Card>
 
-      <Card title="Roles &amp; Permissions" subtitle="A single Administrator role is used for this demo.">
-        <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs dark:bg-slate-800/60">
-              <tr className="text-left text-slate-500 dark:text-slate-400">
-                <th className="px-3 py-2.5 font-semibold">Area</th>
-                <th className="px-3 py-2.5 font-semibold">Administrator</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PERMISSION_ROWS.map((r) => (
-                <tr key={r.area} className="border-t border-slate-100 dark:border-slate-800">
-                  <td className="px-3 py-2.5 text-slate-700 dark:text-slate-200">{r.area}</td>
-                  <td className="px-3 py-2.5 text-slate-500 dark:text-slate-400">{r.access}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <Card
+        title="Recent User Activity"
+        subtitle="Every create, edit, password reset, role change and status change is recorded here — permanently, not clearable."
+      >
+        <AuditList />
+      </Card>
+
+      <Card
+        title="Roles &amp; Permissions"
+        subtitle="What each built-in role grants by default. Pick Custom Role on a user to fine-tune individually."
+        action={
+          <button onClick={() => setRoleRefOpen((v) => !v)} className="text-xs font-medium text-brand hover:underline dark:text-brand-light">
+            {roleRefOpen ? "Hide details" : "Show details"}
+          </button>
+        }
+      >
+        <div className="space-y-3">
+          {ROLE_DEFS.map((r) => {
+            const perms = defaultPermissionsForRole(r.id);
+            const granted = Object.entries(perms).filter(([, p]) => p.view);
+            return (
+              <div key={r.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
+                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">{r.label}</p>
+                <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{r.description}</p>
+                {roleRefOpen && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {granted.length === 0 ? (
+                      <span className="text-xs text-slate-400">No modules by default — configured per user.</span>
+                    ) : (
+                      granted.map(([key, p]) => (
+                        <span
+                          key={key}
+                          className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                        >
+                          {moduleLabel(key as Parameters<typeof moduleLabel>[0])}
+                          {p.create || p.edit || p.delete ? " · full" : " · view"}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </Card>
 
@@ -592,14 +646,40 @@ function AccessTab({ flash }: { flash: (msg: string, tone?: "ok" | "err") => voi
         )}
       </Card>
 
-      <Card title="Password Policy" subtitle="Reference only — this event uses a fixed demo login, not self-service passwords.">
+      <Card title="Password Policy" subtitle="Enforced when an administrator sets or resets a password.">
         <ul className="space-y-1.5 text-sm text-slate-600 dark:text-slate-300">
           <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Minimum 8 characters</li>
-          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> At least one number and one symbol</li>
-          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Passwords expire every 90 days</li>
-          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Reused passwords are rejected</li>
+          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Stored as a salted hash — never in plain text</li>
+          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Only an Administrator can reset another user&apos;s password</li>
+          <li className="flex items-center gap-2"><Icon name="check" size={14} className="text-emerald-500" /> Inactive accounts cannot sign in</li>
         </ul>
       </Card>
+
+      {(modal?.type === "create" || modal?.type === "edit") && (
+        <UserFormModal
+          mode={modal.type}
+          initial={modal.type === "edit" ? modal.user : undefined}
+          performedBy={performedBy}
+          onClose={() => setModal(null)}
+          onSaved={(msg) => flash(msg)}
+        />
+      )}
+      {modal?.type === "view" && <ViewProfileModal user={modal.user} onClose={() => setModal(null)} />}
+      {modal?.type === "resetPassword" && (
+        <ResetPasswordModal user={modal.user} performedBy={performedBy} onClose={() => setModal(null)} onDone={(msg) => flash(msg)} />
+      )}
+      {modal?.type === "changeRole" && (
+        <ChangeRoleModal user={modal.user} performedBy={performedBy} onClose={() => setModal(null)} onDone={(msg) => flash(msg)} />
+      )}
+      {modal?.type === "delete" && (
+        <ConfirmModal
+          title="Delete this user?"
+          message={`${modal.user.fullName} will permanently lose access. This can't be undone.`}
+          confirmLabel="Delete user"
+          onCancel={() => setModal(null)}
+          onConfirm={() => void confirmDelete(modal.user)}
+        />
+      )}
     </div>
   );
 }

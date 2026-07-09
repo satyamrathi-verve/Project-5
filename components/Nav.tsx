@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon, type IconName } from "./icons";
 import { getSession, signOut, onAuthChange } from "@/lib/auth";
+import { hasPermission, useCurrentAccess, type ModuleKey, type Permissions } from "@/lib/users";
 
 /*
   Premium collapsible sidebar (app-wide shell).
@@ -26,6 +27,9 @@ export interface NavLink {
   /** Presence turns this item into an expandable/collapsible group. Scalable —
    *  add more report pages here without touching the sidebar markup. */
   children?: NavLink[];
+  /** Which module governs this link's visibility (Users & Access permissions).
+   *  Omit for always-visible items (e.g. Home). */
+  moduleKey?: ModuleKey;
 }
 export interface NavSection {
   heading: string | null;
@@ -36,31 +40,31 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     heading: "Main",
     links: [
-      { href: "/dashboard", label: "Dashboard", icon: "grid", built: true },
+      { href: "/dashboard", label: "Dashboard", icon: "grid", built: true, moduleKey: "dashboard" },
       { href: "/", label: "Home", icon: "home", built: true },
     ],
   },
   {
     heading: "Masters",
     links: [
-      { href: "/masters/customers", label: "Customer Master", icon: "users", built: true },
-      { href: "/masters/gl", label: "GL Master", icon: "book", built: true },
+      { href: "/masters/customers", label: "Customer Master", icon: "users", built: true, moduleKey: "customers" },
+      { href: "/masters/gl", label: "GL Master", icon: "book", built: true, moduleKey: "gl" },
     ],
   },
   {
     heading: "Sales",
     links: [
-      { href: "/invoices", label: "Sales Invoices", icon: "file", built: true },
-      { href: "/receipts", label: "Receipt Entry", icon: "receipt", built: true },
-      { href: "/upload", label: "Upload Report", icon: "upload", built: true },
+      { href: "/invoices", label: "Sales Invoices", icon: "file", built: true, moduleKey: "invoices" },
+      { href: "/receipts", label: "Receipt Entry", icon: "receipt", built: true, moduleKey: "receipts" },
+      { href: "/upload", label: "Upload Report", icon: "upload", built: true, moduleKey: "upload" },
     ],
   },
   {
     heading: "Collections",
     links: [
-      { href: "/reminders", label: "AR Followup", icon: "mail", built: true },
-      { href: "/reminders/template", label: "Reminder Templates", icon: "pencil", built: true },
-      { href: "/reports/statement", label: "Customer Statement", icon: "scroll", built: true },
+      { href: "/reminders", label: "AR Followup", icon: "mail", built: true, moduleKey: "followups" },
+      { href: "/reminders/template", label: "Reminder Templates", icon: "pencil", built: true, moduleKey: "reminderTemplates" },
+      { href: "/reports/statement", label: "Customer Statement", icon: "scroll", built: true, moduleKey: "statement" },
     ],
   },
   {
@@ -73,14 +77,36 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: "file",
         built: true,
         children: [
-          { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: true },
-          { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: true },
+          { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: true, moduleKey: "reports" },
+          { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: true, moduleKey: "reports" },
         ],
       },
-      { href: "/settings", label: "Settings", icon: "settings", built: true },
+      { href: "/settings", label: "Settings", icon: "settings", built: true, moduleKey: "settings" },
     ],
   },
 ];
+
+/** Which nav items this permission matrix allows the sidebar to show. */
+function isNavItemVisible(l: NavLink, permissions: Permissions | null): boolean {
+  if (!l.moduleKey) return true; // ungated (e.g. Home)
+  return hasPermission(permissions, l.moduleKey, "view");
+}
+
+/** Filter NAV_SECTIONS down to what this user may see — hides empty groups/sections too. */
+export function visibleNavSections(permissions: Permissions | null): NavSection[] {
+  return NAV_SECTIONS.map((section) => {
+    const links = section.links
+      .map((l): NavLink | null => {
+        if (l.children?.length) {
+          const kids = l.children.filter((c) => isNavItemVisible(c, permissions));
+          return kids.length > 0 ? { ...l, children: kids } : null;
+        }
+        return isNavItemVisible(l, permissions) ? l : null;
+      })
+      .filter((l): l is NavLink => l != null);
+    return { ...section, links };
+  }).filter((s) => s.links.length > 0);
+}
 
 export function Sidebar({
   collapsed,
@@ -98,6 +124,8 @@ export function Sidebar({
   // Expand/collapse state per group. `undefined` = follow the default (auto-open
   // when a child route is active); an explicit boolean overrides it.
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const { user } = useCurrentAccess();
+  const sections = useMemo(() => visibleNavSections(user?.permissions ?? null), [user]);
 
   useEffect(() => {
     const sync = () => setName(getSession()?.name ?? null);
@@ -216,7 +244,7 @@ export function Sidebar({
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
-          {NAV_SECTIONS.map((section) => (
+          {sections.map((section) => (
             <div key={section.heading ?? "top"} className="mb-4">
               {section.heading && !collapsed && (
                 <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-500">

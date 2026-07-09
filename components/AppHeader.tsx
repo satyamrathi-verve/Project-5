@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "./icons";
-import { NAV_SECTIONS } from "./Nav";
+import { visibleNavSections } from "./Nav";
 import { Popover, Z } from "@/components/overlay";
+import { useCurrentAccess } from "@/lib/users";
 
 type MenuId = "search" | "create" | "notif" | "settings";
 
@@ -33,8 +34,13 @@ export function AppHeader({
   const notifAnchor = useRef<HTMLDivElement>(null);
   const settingsAnchor = useRef<HTMLDivElement>(null);
 
-  // Flatten to navigable leaves (expandable group parents have no page of their own).
-  const allLinks = useMemo(() => NAV_SECTIONS.flatMap((s) => s.links.flatMap((l) => l.children ?? [l])), []);
+  const { user } = useCurrentAccess();
+  // Flatten to navigable leaves the current user can actually see (expandable
+  // group parents have no page of their own).
+  const allLinks = useMemo(
+    () => visibleNavSections(user?.permissions ?? null).flatMap((s) => s.links.flatMap((l) => l.children ?? [l])),
+    [user],
+  );
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     return allLinks.filter((l) => !q || l.label.toLowerCase().includes(q));
