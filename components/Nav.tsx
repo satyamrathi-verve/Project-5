@@ -18,10 +18,14 @@ import { getSession, signOut, onAuthChange } from "@/lib/auth";
 */
 
 export interface NavLink {
-  href: string;
+  /** Leaf links have an href. Group parents (with `children`) omit it. */
+  href?: string;
   label: string;
   icon: IconName;
   built: boolean;
+  /** Presence turns this item into an expandable/collapsible group. Scalable —
+   *  add more report pages here without touching the sidebar markup. */
+  children?: NavLink[];
 }
 export interface NavSection {
   heading: string | null;
@@ -57,15 +61,23 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/reminders", label: "AR Followup", icon: "mail", built: true },
       { href: "/reminders/template", label: "Reminder Templates", icon: "pencil", built: true },
       { href: "/reports/statement", label: "Customer Statement", icon: "scroll", built: true },
-      { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: true },
-      { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: true },
     ],
   },
   {
     heading: "System",
     links: [
-      { href: "/reports", label: "Reports", icon: "file", built: false },
-      { href: "/settings", label: "Settings", icon: "settings", built: false },
+      {
+        // Expandable Reports group — add Trial Balance, Balance Sheet, P&L,
+        // Cash Flow Statement, General Ledger, etc. as children later.
+        label: "Reports",
+        icon: "file",
+        built: true,
+        children: [
+          { href: "/reports/ageing", label: "AR Ageing", icon: "bars", built: true },
+          { href: "/cashflow", label: "Cashflow Projection", icon: "trend", built: true },
+        ],
+      },
+      { href: "/settings", label: "Settings", icon: "settings", built: true },
     ],
   },
 ];
@@ -83,6 +95,9 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const [name, setName] = useState<string | null>(null);
+  // Expand/collapse state per group. `undefined` = follow the default (auto-open
+  // when a child route is active); an explicit boolean overrides it.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const sync = () => setName(getSession()?.name ?? null);
@@ -92,6 +107,86 @@ export function Sidebar({
 
   // Clears the session; AuthGate notices and swaps the app back to the login.
   const logout = () => signOut();
+
+  const base = `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+    collapsed ? "justify-center" : ""
+  }`;
+
+  // A single leaf link (built → real Link, unbuilt → non-navigable "soon" item).
+  const leaf = (l: NavLink, indented = false) => {
+    const active = pathname === l.href;
+    const cls = `${base} ${indented && !collapsed ? "pl-9" : ""}`;
+    const content = (
+      <>
+        <span className="flex-none">
+          <Icon name={l.icon} size={indented ? 17 : 19} />
+        </span>
+        {!collapsed && <span className="truncate">{l.label}</span>}
+        {!collapsed && !l.built && (
+          <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400">
+            soon
+          </span>
+        )}
+      </>
+    );
+    if (!l.built || !l.href) {
+      return (
+        <li key={l.label}>
+          <span title={collapsed ? `${l.label} (coming soon)` : undefined} className={`${cls} cursor-default text-slate-500`}>
+            {content}
+          </span>
+        </li>
+      );
+    }
+    return (
+      <li key={l.href}>
+        <Link
+          href={l.href}
+          onClick={onCloseMobile}
+          title={collapsed ? l.label : undefined}
+          aria-current={active ? "page" : undefined}
+          className={`${cls} ${
+            active ? "bg-white/10 text-white shadow-inner ring-1 ring-white/10" : "text-slate-300 hover:bg-white/5 hover:text-white"
+          }`}
+        >
+          {content}
+        </Link>
+      </li>
+    );
+  };
+
+  // A nav item: either a leaf, or an expandable group when it has children.
+  const renderItem = (l: NavLink) => {
+    if (!l.children?.length) return leaf(l);
+    // In the collapsed (icon-only) rail, flatten children to reachable icons.
+    if (collapsed) return l.children.map((c) => leaf(c));
+
+    const hasActiveChild = l.children.some((c) => c.href === pathname);
+    const open = openGroups[l.label] ?? hasActiveChild;
+    return (
+      <li key={l.label}>
+        <button
+          type="button"
+          onClick={() => setOpenGroups((s) => ({ ...s, [l.label]: !open }))}
+          aria-expanded={open}
+          className={`${base} w-full ${hasActiveChild ? "text-white" : "text-slate-300 hover:bg-white/5 hover:text-white"}`}
+        >
+          <span className="flex-none">
+            <Icon name={l.icon} size={19} />
+          </span>
+          <span className="truncate">{l.label}</span>
+          <span className={`ml-auto transition-transform duration-200 ${open ? "rotate-90" : ""}`}>
+            <Icon name="chevronRight" size={16} />
+          </span>
+        </button>
+        {open && (
+          <ul className="ml-4 mt-0.5 space-y-0.5 border-l border-white/10 pl-1">
+            {l.children.map((c) => leaf(c, true))}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   return (
     <>
@@ -128,56 +223,7 @@ export function Sidebar({
                   {section.heading}
                 </p>
               )}
-              <ul className="space-y-0.5">
-                {section.links.map((l) => {
-                  const active = pathname === l.href;
-                  const content = (
-                    <>
-                      <span className="flex-none">
-                        <Icon name={l.icon} size={19} />
-                      </span>
-                      {!collapsed && <span className="truncate">{l.label}</span>}
-                      {!collapsed && !l.built && (
-                        <span className="ml-auto rounded bg-white/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400">
-                          soon
-                        </span>
-                      )}
-                    </>
-                  );
-                  const base = `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                    collapsed ? "justify-center" : ""
-                  }`;
-                  if (!l.built) {
-                    return (
-                      <li key={l.href}>
-                        <span
-                          title={collapsed ? `${l.label} (coming soon)` : undefined}
-                          className={`${base} cursor-default text-slate-500`}
-                        >
-                          {content}
-                        </span>
-                      </li>
-                    );
-                  }
-                  return (
-                    <li key={l.href}>
-                      <Link
-                        href={l.href}
-                        onClick={onCloseMobile}
-                        title={collapsed ? l.label : undefined}
-                        aria-current={active ? "page" : undefined}
-                        className={`${base} ${
-                          active
-                            ? "bg-white/10 text-white shadow-inner ring-1 ring-white/10"
-                            : "text-slate-300 hover:bg-white/5 hover:text-white"
-                        }`}
-                      >
-                        {content}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
+              <ul className="space-y-0.5">{section.links.map((l) => renderItem(l))}</ul>
             </div>
           ))}
         </nav>

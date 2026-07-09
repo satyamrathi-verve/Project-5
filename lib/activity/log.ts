@@ -115,3 +115,21 @@ export function getLocalActivity(module: string, recordId: string): ActivityEven
     .filter((e) => e.module === module && e.recordId === recordId)
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }
+
+/** Most recent activity across every module (System Settings' Activity Logs). */
+export function getAllActivity(limit = 20): ActivityEvent[] {
+  return readAll()
+    .sort((a, b) => (a.at < b.at ? 1 : -1))
+    .slice(0, limit);
+}
+
+/** Total number of locally-logged events, across every module. */
+export function countAllActivity(): number {
+  return readAll().length;
+}
+
+/** Wipe the entire local activity log (used by Settings > Activity Logs > Clear). */
+export function clearActivity(): void {
+  writeAll([]);
+  emit();
+}

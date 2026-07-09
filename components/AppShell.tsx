@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Sidebar } from "./Nav";
 import { AppHeader } from "./AppHeader";
+import { getTheme, setTheme as applyTheme, onThemeChange } from "@/lib/theme";
 
 /*
   Client shell that owns the presentation state shared by the sidebar + header
@@ -17,26 +18,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
-    setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    setTheme(getTheme());
     try {
       setCollapsed(localStorage.getItem("nav.collapsed") === "1");
     } catch {
       /* ignore */
     }
+    // Stay in sync when the theme is changed elsewhere (e.g. the Settings page).
+    return onThemeChange(() => setTheme(getTheme()));
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
-      const next = prev === "dark" ? "light" : "dark";
-      const root = document.documentElement;
-      root.classList.toggle("dark", next === "dark");
-      try {
-        localStorage.setItem("theme", next);
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+    applyTheme(getTheme() === "dark" ? "light" : "dark");
   }, []);
 
   const toggleCollapse = useCallback(() => {

@@ -33,7 +33,8 @@ export function AppHeader({
   const notifAnchor = useRef<HTMLDivElement>(null);
   const settingsAnchor = useRef<HTMLDivElement>(null);
 
-  const allLinks = useMemo(() => NAV_SECTIONS.flatMap((s) => s.links), []);
+  // Flatten to navigable leaves (expandable group parents have no page of their own).
+  const allLinks = useMemo(() => NAV_SECTIONS.flatMap((s) => s.links.flatMap((l) => l.children ?? [l])), []);
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     return allLinks.filter((l) => !q || l.label.toLowerCase().includes(q));
@@ -108,11 +109,11 @@ export function AppHeader({
               <li className="px-3 py-6 text-center text-sm text-slate-400">No matches.</li>
             ) : (
               results.map((l) => (
-                <li key={l.href}>
+                <li key={l.href ?? l.label}>
                   <button
                     type="button"
-                    disabled={!l.built}
-                    onClick={() => go(l.href, l.built)}
+                    disabled={!l.built || !l.href}
+                    onClick={() => l.href && go(l.href, l.built)}
                     className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-700"
                   >
                     <Icon name={l.icon} size={17} />

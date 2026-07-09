@@ -9,5 +9,8 @@ export {
   logActivity,
   logActivityBatch,
   getLocalActivity,
+  getAllActivity,
+  countAllActivity,
+  clearActivity,
   onActivityChange,
 } from "./log";
