@@ -192,6 +192,68 @@ function compareRows(a: Row, b: Row, key: SortKey): number {
   }
 }
 
+/* Download icon for the CSV export button. */
+function DownloadIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+      aria-hidden="true"
+    >
+      <path d="M10 3 V13" />
+      <path d="M6 9 L10 13 L14 9" />
+      <path d="M4 16 H16" />
+    </svg>
+  );
+}
+
+/* CSV helpers — export the finance summary of whatever rows you pass in.
+   Opens straight in Excel or Google Sheets. */
+function csvCell(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function buildInvoiceCsv(rows: Row[]): string {
+  const header = [
+    "Invoice No", "Invoice Date", "Due Date", "Customer", "GSTIN",
+    "Subtotal", "Tax", "Total", "Received", "Balance Due", "Status",
+  ];
+  const lines = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.invoice_no, r.invoice_date, r.due_date, r.customers?.name ?? "",
+        r.customers?.gstin ?? "", r.subtotal, r.tax_amount, r.total,
+        r.received, r.due, r.status,
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+  return lines.join("\r\n");
+}
+
+function downloadCsv(filename: string, csv: string) {
+  // Leading BOM so Excel reads ₹ and other UTF-8 characters correctly.
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /* One printable invoice document — rendered once per invoice being printed. */
 function InvoiceDocument({
   invoice,
@@ -208,34 +270,36 @@ function InvoiceDocument({
   );
 
   return (
-    <div className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-10 shadow-sm print:max-w-none print:rounded-none print:border-0 print:px-[16mm] print:py-[14mm] print:shadow-none">
-      {/* Letterhead */}
-      <div className="flex items-start justify-between border-b-4 border-brand pb-6">
+    <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm print:max-w-none print:rounded-none print:border-0 print:shadow-none">
+      {/* Brand header band */}
+      <div className="flex items-start justify-between gap-6 bg-gradient-to-r from-[#22397a] via-[#2b4c9c] to-[#3f6fd6] px-10 py-7 text-white print:px-[16mm] print:py-[12mm]">
         <div>
-          <VerveLogo className="text-[20px]" />
-          <h1 className="mt-3 text-lg font-bold text-slate-900">
-            {company?.name ?? "Company"}
-          </h1>
+          <span className="inline-flex rounded-lg bg-white px-3 py-2 shadow-sm">
+            <VerveLogo className="text-[15px]" />
+          </span>
+          <h1 className="mt-3 text-lg font-bold">{company?.name ?? "Company"}</h1>
           {company?.address && (
-            <p className="mt-1 max-w-xs text-xs leading-relaxed text-slate-500">
-              {company.address}
-            </p>
+            <p className="mt-0.5 max-w-xs text-xs leading-relaxed text-white/75">{company.address}</p>
           )}
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-white/75">
             {[company?.gstin && `GSTIN: ${company.gstin}`, company?.email, company?.phone]
               .filter(Boolean)
-              .join(" · ")}
+              .join("  ·  ")}
           </p>
         </div>
         <div className="text-right">
-          <p className="text-3xl font-bold uppercase tracking-widest text-brand">Tax Invoice</p>
+          <p className="text-4xl font-black uppercase tracking-[0.18em]">Invoice</p>
+          <p className="mt-1 text-xs font-medium uppercase tracking-widest text-white/70">Tax Invoice</p>
           <span
-            className={`mt-2 inline-block rounded-full px-3 py-1 text-xs font-semibold uppercase ${STATUS_STYLES[invoice.status] ?? "bg-slate-100 text-slate-600"}`}
+            className={`mt-3 inline-block rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${STATUS_STYLES[invoice.status] ?? "bg-white/20 text-white"}`}
           >
             {invoice.status}
           </span>
         </div>
       </div>
+
+      {/* Document body */}
+      <div className="px-10 py-8 print:px-[16mm] print:py-[10mm]">
 
       {/* Bill-to + invoice meta */}
       <div className="flex justify-between gap-8 py-6">
@@ -310,68 +374,66 @@ function InvoiceDocument({
         </tbody>
       </table>
 
-      {/* Totals */}
-      <div className="mt-4 flex justify-end">
-        <table className="w-72 text-sm">
-          <tbody>
-            <tr>
-              <td className="py-1 text-slate-500">Subtotal</td>
-              <td className="py-1 text-right text-slate-800">{inr.format(invoice.subtotal)}</td>
-            </tr>
-            <tr>
-              <td className="py-1 text-slate-500">Tax</td>
-              <td className="py-1 text-right text-slate-800">{inr.format(invoice.tax_amount)}</td>
-            </tr>
-            <tr className="border-t-2 border-slate-300">
-              <td className="py-1.5 text-base font-bold text-slate-900">Total</td>
-              <td className="py-1.5 text-right text-base font-bold text-slate-900">{inr.format(invoice.total)}</td>
-            </tr>
-            <tr>
-              <td className="py-1 text-slate-500">Amount Received</td>
-              <td className="py-1 text-right text-slate-800">{inr.format(received)}</td>
-            </tr>
-            <tr>
-              <td className="py-1 font-semibold text-slate-900">Balance Due</td>
-              <td
-                className={`py-1 text-right font-semibold ${outstanding > 0 ? "text-red-600" : "text-green-600"}`}
-              >
-                {inr.format(outstanding)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      {/* Totals + amount in words */}
+      <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:justify-between">
+        <div className="flex-1 text-xs text-slate-500">
+          <p className="rounded-lg bg-slate-50 px-3 py-2">
+            <span className="font-semibold text-slate-600">Amount in words: </span>
+            {amountInWords(invoice.total)}
+          </p>
+          {invoice.notes && (
+            <p className="mt-2">
+              <span className="font-semibold text-slate-600">Notes: </span>
+              {invoice.notes}
+            </p>
+          )}
+        </div>
+        <div className="w-full sm:w-72">
+          <div className="space-y-1 text-sm">
+            <div className="flex justify-between">
+              <span className="text-slate-500">Subtotal</span>
+              <span className="tabular-nums text-slate-800">{inr.format(invoice.subtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-500">Tax</span>
+              <span className="tabular-nums text-slate-800">{inr.format(invoice.tax_amount)}</span>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between rounded-lg bg-brand px-4 py-2.5 text-white">
+            <span className="font-semibold">Total</span>
+            <span className="text-lg font-bold tabular-nums">{inr.format(invoice.total)}</span>
+          </div>
+          <div className="mt-1.5 flex justify-between px-4 text-sm">
+            <span className="text-slate-500">Amount Received</span>
+            <span className="tabular-nums text-slate-700">{inr.format(received)}</span>
+          </div>
+          <div
+            className={`mt-2 flex items-center justify-between rounded-lg px-4 py-3 ${outstanding <= 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
+          >
+            <span className="text-xs font-semibold uppercase tracking-wide">Balance Due</span>
+            <span className="text-xl font-black tabular-nums">{inr.format(outstanding)}</span>
+          </div>
+        </div>
       </div>
 
-      {/* Amount in words */}
-      <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
-        <span className="font-semibold text-slate-600">Amount in words: </span>
-        {amountInWords(invoice.total)}
-      </p>
-
-      {invoice.notes && (
-        <p className="mt-2 text-xs text-slate-500">
-          <span className="font-semibold text-slate-600">Notes: </span>
-          {invoice.notes}
-        </p>
-      )}
-
-      {/* Signature + footer */}
-      <div className="mt-12 flex items-end justify-between">
-        <p className="text-[10px] text-slate-400">
-          This is a computer-generated invoice.
-        </p>
-        <div className="text-center">
-          <div className="mb-1 flex h-12 w-48 items-end justify-center border-b border-slate-300">
-            <span
-              style={{ fontFamily: '"Segoe Script", "Brush Script MT", cursive' }}
-              className="pb-1 text-2xl italic text-slate-700"
-            >
-              abc
-            </span>
-          </div>
-          <p className="text-xs text-slate-500">
-            For <span className="font-semibold text-slate-700">{company?.name ?? "Company"}</span> — Authorised Signatory
+        {/* Signature + footer */}
+        <div className="mt-12 flex items-end justify-between border-t border-slate-100 pt-6">
+          <p className="text-[10px] text-slate-400">
+            This is a computer-generated invoice. Thank you for your business.
           </p>
+          <div className="text-center">
+            <div className="mb-1 flex h-12 w-48 items-end justify-center border-b border-slate-300">
+              <span
+                style={{ fontFamily: '"Segoe Script", "Brush Script MT", cursive' }}
+                className="pb-1 text-2xl italic text-slate-700"
+              >
+                abc
+              </span>
+            </div>
+            <p className="text-xs text-slate-500">
+              For <span className="font-semibold text-slate-700">{company?.name ?? "Company"}</span> — Authorised Signatory
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -385,6 +447,8 @@ export default function InvoicePrintPage() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Mac vs Windows — so the "Save as PDF" tip shows the right keys/steps.
+  const [isMac, setIsMac] = useState(false);
 
   // Selection + filters (all persisted to sessionStorage).
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -484,6 +548,13 @@ export default function InvoicePrintPage() {
       setLoading(false);
     }
     load();
+  }, []);
+
+  // Detect the operating system once, on the client.
+  useEffect(() => {
+    const p = navigator.platform || "";
+    const ua = navigator.userAgent || "";
+    setIsMac(/Mac|iPhone|iPad|iPod/.test(p) || /Mac OS X/.test(ua));
   }, []);
 
   // Every invoice enriched with received + due (outstanding) amounts.
@@ -606,6 +677,15 @@ export default function InvoicePrintPage() {
 
   function setRange(col: string, part: "min" | "max", value: string) {
     setRanges((prev) => ({ ...prev, [col]: { ...prev[col], [part]: value } }));
+  }
+
+  // Export to CSV: the ticked invoices if any are selected, otherwise the whole
+  // filtered list you're looking at.
+  function exportCsv() {
+    const rows = selectedRows.length > 0 ? selectedRows : visibleRows;
+    if (rows.length === 0) return;
+    const scope = selectedRows.length > 0 ? "selected" : "list";
+    downloadCsv(`invoices-${scope}-${rows.length}.csv`, buildInvoiceCsv(rows));
   }
 
   // Column totals across the filtered rows — the finance-desk footer.
@@ -855,19 +935,44 @@ export default function InvoicePrintPage() {
         )}
 
         {/* Toolbar — filtering lives in each column header (the funnel icons) */}
-        <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="mb-3 flex items-center justify-between gap-4">
           <p className="text-sm text-slate-500">
             Showing <span className="font-semibold text-slate-700">{visibleRows.length}</span> of {allRows.length}{" "}
             invoices · Due <span className="font-semibold text-red-600">{inr.format(totals.due)}</span>
           </p>
-          {hasFilters && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={clearFilters}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              onClick={exportCsv}
+              disabled={visibleRows.length === 0}
+              title={
+                selectedRows.length > 0
+                  ? `Export ${selectedRows.length} selected invoice${selectedRows.length === 1 ? "" : "s"} to CSV`
+                  : "Export the shown list to CSV (Excel / Google Sheets)"
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
             >
-              Clear filters
+              <DownloadIcon /> Export CSV
             </button>
-          )}
+            {hasFilters && (
+              <button
+                onClick={clearFilters}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* How-to-save hint — adapts to Windows or Mac */}
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+          <p>
+            <strong>Save as PDF:</strong>{" "}
+            {isMac
+              ? "press ⌘ + P, then open the PDF ▾ menu at the bottom-left and choose “Save as PDF”."
+              : "press Ctrl + P, then set the printer to “Save as PDF” (or “Microsoft Print to PDF”)."}{" "}
+            Prefer a spreadsheet? Use <strong>Export CSV</strong> — it opens in Excel or Google Sheets.
+          </p>
         </div>
 
         {/* Invoice table */}
@@ -1005,7 +1110,7 @@ export default function InvoicePrintPage() {
 
       {printRows.length === 0 && !loading && (
         <div className="print:hidden rounded-xl border border-dashed border-slate-300 bg-white px-4 py-16 text-center text-slate-400">
-          Tick one or more invoices above (or use the 🖨 on a row) to see the print preview.
+          Tick one or more invoices above (or use the print button on a row) to see the print preview.
         </div>
       )}
     </div>
