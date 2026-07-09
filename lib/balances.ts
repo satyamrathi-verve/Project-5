@@ -45,6 +45,72 @@ export function formatMoney(amount: number, currency: string = BASE_CURRENCY): s
  */
 const LEDGER_TABLE: string | null = null;
 
+/**
+ * Demo GL balances. While no ledger table exists every account would otherwise
+ * read ₹0.00 — a wall of zeros that looks unfinished. With this on, each account
+ * gets a realistic, DETERMINISTIC balance (seeded by its code, so it's stable
+ * across reloads) that respects accounting sign (contra accounts go negative).
+ * Modular: set to false — or wire LEDGER_TABLE to a real ledger — to disable.
+ */
+export const GL_BALANCES_DEMO = true;
+
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashCode(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** A realistic balance for one account, based on its business purpose. */
+function demoBalanceFor(a: GLAccount): number {
+  const rnd = mulberry32(hashCode(a.code));
+  const n = a.name.toLowerCase();
+  const g = (a.parent_group ?? "").toLowerCase();
+  const amt = (min: number, max: number, step = 1000) => Math.round((min + rnd() * (max - min)) / step) * step;
+
+  // Contra / provision accounts carry a negative (credit) balance.
+  if (/accum|depreciation/.test(n)) return -amt(200_000, 2_500_000);
+  if (/allowance|doubtful|provision/.test(n)) return -amt(20_000, 150_000);
+  if (/suspense|rounding|clearing/.test(n)) return amt(0, 6_000, 100);
+
+  if (a.type === "asset") {
+    if (/petty cash|cash on hand|undeposited/.test(n)) return amt(10_000, 90_000, 500);
+    if (/bank/.test(n)) return amt(600_000, 5_000_000);
+    if (/receivable|debtor/.test(n)) return amt(800_000, 4_000_000);
+    if (/invent|raw material|work in progress|finished goods|stock/.test(n)) return amt(400_000, 3_000_000);
+    if (/prepaid|advance|input tax|\bgst\b|\bvat\b|credit/.test(n)) return amt(20_000, 400_000);
+    if (g.includes("fixed asset") || /building|machinery|plant|equipment|furniture|computer|vehicle|land|leasehold|fixture/.test(n)) return amt(1_000_000, 9_000_000);
+    return amt(50_000, 800_000);
+  }
+  if (a.type === "liability") {
+    if (g.includes("equity") || /capital|share|reserve|retained|surplus/.test(n)) return amt(2_000_000, 12_000_000);
+    if (/loan|borrow|debenture|mortgage|overdraft/.test(n)) return amt(1_000_000, 7_000_000);
+    if (/payable|creditor|\bgst\b|\bvat\b|tax|duty|tds/.test(n)) return amt(200_000, 2_500_000);
+    return amt(100_000, 1_500_000);
+  }
+  if (a.type === "income") return amt(1_000_000, 9_000_000);
+  return amt(80_000, 2_200_000); // expense
+}
+
+/** Deterministic realistic balances for every account (demo mode). */
+export function demoBalances(accounts: GLAccount[]): Record<string, number> {
+  const byId: Record<string, number> = {};
+  for (const a of accounts) byId[a.id] = demoBalanceFor(a);
+  return byId;
+}
+
 /** Column names expected on the ledger table (adjust when wiring the real one). */
 const LEDGER = { account: "account_id", debit: "debit", credit: "credit", posted: "posted", date: "posted_at" };
 
@@ -67,6 +133,8 @@ export async function loadBalances(
   const byId: Record<string, number> = {};
   for (const a of accounts) byId[a.id] = 0;
 
+  // No ledger yet → show realistic demo balances instead of a wall of zeros.
+  if (!LEDGER_TABLE && GL_BALANCES_DEMO) return { byId: demoBalances(accounts), currency };
   if (!LEDGER_TABLE) return { byId, currency };
 
   const res = await supabase.from(LEDGER_TABLE).select("*").eq(LEDGER.posted, true);
