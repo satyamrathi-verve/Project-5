@@ -22,7 +22,13 @@ import { VerveLogo } from "@/components/VerveLogo";
 */
 
 type FullInvoice = Invoice & { customers: Customer; invoice_items: InvoiceItem[] };
-type Row = FullInvoice & { received: number; due: number };
+/* `effStatus` and `overdueDays` are derived at render time — see derivedStatus. */
+type Row = FullInvoice & {
+  received: number;
+  due: number;
+  overdueDays: number;
+  effStatus: InvoiceStatus;
+};
 
 type SortKey =
   | "invoice_no"
@@ -32,6 +38,7 @@ type SortKey =
   | "total"
   | "received"
   | "due"
+  | "overdue_days"
   | "status";
 type SortDir = "asc" | "desc";
 
@@ -91,13 +98,75 @@ const STATUS_STYLES: Record<string, string> = {
   overdue: "bg-red-100 text-red-700",
 };
 
-const STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: "all", label: "All statuses" },
-  { value: "open", label: "Open" },
-  { value: "partial", label: "Partial" },
-  { value: "overdue", label: "Overdue" },
-  { value: "paid", label: "Paid" },
-];
+/* Amounts under half a paisa are rounding dust, not money owed. */
+const EPSILON = 0.005;
+const MS_PER_DAY = 86_400_000;
+
+/* Whole days a due date has slipped past today. Never negative. */
+function daysPast(dueIso: string, todayIso: string): number {
+  const d = Math.floor((Date.parse(todayIso) - Date.parse(dueIso)) / MS_PER_DAY);
+  return d > 0 ? d : 0;
+}
+
+/* The status we DISPLAY, derived from the money and the calendar rather than
+   trusting invoices.status — that column is written once and goes stale, so a
+   long-unpaid invoice can still be sitting there labelled "open". Per the house
+   rule: overdue = still owed AND due_date < today. */
+function derivedStatus(due: number, received: number, overdueDays: number): InvoiceStatus {
+  if (due <= EPSILON) return "paid";
+  if (overdueDays > 0) return "overdue";
+  return received > EPSILON ? "partial" : "open";
+}
+
+/* The effective GST rate this invoice was raised at. */
+function taxPercent(subtotal: number, tax: number): string {
+  if (subtotal <= 0) return "0";
+  const r = Math.round((tax / subtotal) * 10000) / 100;
+  return Number.isInteger(r) ? String(r) : r.toFixed(2);
+}
+
+/* GSTIN's first two digits are the state code. Only the states our customers
+   are actually in, plus the ones a demo is likely to reach for. */
+const STATE_BY_CODE: Record<string, string> = {
+  "06": "Haryana",
+  "07": "Delhi",
+  "09": "Uttar Pradesh",
+  "24": "Gujarat",
+  "27": "Maharashtra",
+  "29": "Karnataka",
+  "32": "Kerala",
+  "33": "Tamil Nadu",
+  "36": "Telangana",
+};
+
+/* Supplier is in Maharashtra (GSTIN 27…). Same state → the tax splits into
+   CGST + SGST; any other state is inter-state → a single IGST line. */
+function gstLines(
+  customer: Customer | null,
+  subtotal: number,
+  tax: number
+): { label: string; amount: number }[] {
+  const pct = taxPercent(subtotal, tax);
+  const intraState = (customer?.gstin ?? "").trim().startsWith("27");
+  if (!intraState) return [{ label: `IGST @ ${pct}%`, amount: tax }];
+  const half = Number(pct) / 2;
+  const halfPct = Number.isInteger(half) ? String(half) : half.toFixed(2);
+  return [
+    { label: `CGST @ ${halfPct}%`, amount: tax / 2 },
+    { label: `SGST @ ${halfPct}%`, amount: tax / 2 },
+  ];
+}
+
+function placeOfSupply(customer: Customer | null): string {
+  const code = (customer?.gstin ?? "").trim().slice(0, 2);
+  const state = STATE_BY_CODE[code];
+  return state ? `${state} (${code})` : customer?.address || "—";
+}
+
+/* Every seeded line is a professional-advisory engagement; 998311 is the SAC for
+   management-consulting services. The invoice_items table has no HSN/SAC column
+   and the backend is read-only, so the code is fixed here for the document. */
+const SAC_CODE = "998311";
 
 /* Drawn (non-emoji) sort indicator: up when asc, down when desc, faint both when idle. */
 function SortIcon({ dir }: { dir: SortDir | null }) {
@@ -162,15 +231,6 @@ function BackArrow({ size = 14 }: { size?: number }) {
   );
 }
 
-/* Fresh, empty min/max ranges for the numeric column filters. */
-function freshRanges(): Record<string, { min: string; max: string }> {
-  return {
-    total: { min: "", max: "" },
-    received: { min: "", max: "" },
-    due: { min: "", max: "" },
-  };
-}
-
 function compareRows(a: Row, b: Row, key: SortKey): number {
   switch (key) {
     case "invoice_no":
@@ -187,8 +247,42 @@ function compareRows(a: Row, b: Row, key: SortKey): number {
       return a.received - b.received;
     case "due":
       return a.due - b.due;
+    case "overdue_days":
+      return a.overdueDays - b.overdueDays;
     case "status":
-      return a.status.localeCompare(b.status);
+      return a.effStatus.localeCompare(b.effStatus);
+  }
+}
+
+/* A row's raw value for a column, as a string key (used by the value filters). */
+function rowKey(r: Row, col: SortKey): string {
+  switch (col) {
+    case "invoice_no": return r.invoice_no;
+    case "invoice_date": return r.invoice_date;
+    case "due_date": return r.due_date;
+    case "customer": return r.customers?.name ?? "—";
+    case "total": return String(r.total);
+    case "received": return String(r.received);
+    case "due": return String(r.due);
+    case "overdue_days": return String(r.overdueDays);
+    case "status": return r.effStatus;
+  }
+}
+
+/* How a column's value key is shown in the filter checklist. */
+function keyLabel(col: SortKey, key: string): string {
+  switch (col) {
+    case "invoice_date":
+    case "due_date":
+      return formatDate(key);
+    case "total":
+    case "received":
+    case "due":
+      return inr.format(Number(key));
+    case "status":
+      return key.charAt(0).toUpperCase() + key.slice(1);
+    default:
+      return key;
   }
 }
 
@@ -224,7 +318,8 @@ function csvCell(v: unknown): string {
 function buildInvoiceCsv(rows: Row[]): string {
   const header = [
     "Invoice No", "Invoice Date", "Due Date", "Customer", "GSTIN",
-    "Subtotal", "Tax", "Total", "Received", "Balance Due", "Status",
+    "Taxable Value", "Tax", "Total", "Received", "Balance Due",
+    "Days Overdue", "Status",
   ];
   const lines = [header.join(",")];
   for (const r of rows) {
@@ -232,7 +327,7 @@ function buildInvoiceCsv(rows: Row[]): string {
       [
         r.invoice_no, r.invoice_date, r.due_date, r.customers?.name ?? "",
         r.customers?.gstin ?? "", r.subtotal, r.tax_amount, r.total,
-        r.received, r.due, r.status,
+        r.received, r.due, r.overdueDays, r.effStatus,
       ]
         .map(csvCell)
         .join(",")
@@ -254,25 +349,54 @@ function downloadCsv(filename: string, csv: string) {
   URL.revokeObjectURL(url);
 }
 
+/* A headline number for the row of tiles above the table. `tone` colours only the
+   value, so the tiles stay calm and the eye lands on the one that matters. */
+function StatTile({
+  label,
+  value,
+  hint,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "neutral" | "good" | "bad";
+}) {
+  const toneClass =
+    tone === "bad" ? "text-red-600" : tone === "good" ? "text-green-600" : "text-slate-900";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-card">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className={`mt-1 text-xl font-bold tabular-nums ${toneClass}`}>{value}</p>
+      <p className="mt-0.5 h-4 text-xs text-slate-400">{hint ?? ""}</p>
+    </div>
+  );
+}
+
 /* One printable invoice document — rendered once per invoice being printed. */
 function InvoiceDocument({
   invoice,
   company,
   received,
+  status,
 }: {
   invoice: FullInvoice;
   company: Company | null;
   received: number;
+  status: InvoiceStatus;
 }) {
   const outstanding = invoice.total - received;
   const items = [...invoice.invoice_items].sort((a, b) =>
     a.description.localeCompare(b.description)
   );
+  const customer = invoice.customers ?? null;
+  const taxLines = gstLines(customer, invoice.subtotal, invoice.tax_amount);
 
   return (
     <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm print:max-w-none print:rounded-none print:border-0 print:shadow-none">
-      {/* Brand header band */}
-      <div className="flex items-start justify-between gap-6 bg-gradient-to-r from-[#22397a] via-[#2b4c9c] to-[#3f6fd6] px-10 py-7 text-white print:px-[16mm] print:py-[12mm]">
+      {/* Brand header band — derived from the brand indigo so it agrees with the
+          Total bar further down (these used to be two unrelated blues). */}
+      <div className="flex items-start justify-between gap-6 bg-gradient-to-r from-brand-dark via-brand to-brand-light px-10 py-7 text-white print:px-[16mm] print:py-[12mm]">
         <div>
           <span className="inline-flex rounded-lg bg-white px-3 py-2 shadow-sm">
             <VerveLogo className="text-[15px]" />
@@ -290,10 +414,13 @@ function InvoiceDocument({
         <div className="text-right">
           <p className="text-4xl font-black uppercase tracking-[0.18em]">Invoice</p>
           <p className="mt-1 text-xs font-medium uppercase tracking-widest text-white/70">Tax Invoice</p>
+          <p className="mt-0.5 text-[10px] uppercase tracking-widest text-white/60">
+            Original for Recipient
+          </p>
           <span
-            className={`mt-3 inline-block rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${STATUS_STYLES[invoice.status] ?? "bg-white/20 text-white"}`}
+            className={`mt-3 inline-block rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${STATUS_STYLES[status] ?? "bg-white/20 text-white"}`}
           >
-            {invoice.status}
+            {status}
           </span>
         </div>
       </div>
@@ -346,6 +473,14 @@ function InvoiceDocument({
               <dt className="text-slate-500">Due Date</dt>
               <dd className="font-medium text-slate-900">{formatDate(invoice.due_date)}</dd>
             </div>
+            <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-2 text-xs">
+              <dt className="shrink-0 text-slate-500">Place of Supply</dt>
+              <dd className="text-right font-medium text-slate-900">{placeOfSupply(customer)}</dd>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <dt className="text-slate-500">Reverse Charge</dt>
+              <dd className="font-medium text-slate-900">No</dd>
+            </div>
           </dl>
         </div>
       </div>
@@ -356,6 +491,7 @@ function InvoiceDocument({
           <tr className="border-y border-slate-300 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 print:bg-transparent">
             <th className="w-10 px-2 py-2.5">#</th>
             <th className="px-2 py-2.5">Description</th>
+            <th className="w-24 px-2 py-2.5">HSN/SAC</th>
             <th className="w-16 px-2 py-2.5 text-right">Qty</th>
             <th className="w-28 px-2 py-2.5 text-right">Rate</th>
             <th className="w-32 px-2 py-2.5 text-right">Amount</th>
@@ -366,9 +502,10 @@ function InvoiceDocument({
             <tr key={it.id} className="border-b border-slate-100">
               <td className="px-2 py-2.5 text-slate-400">{idx + 1}</td>
               <td className="px-2 py-2.5 text-slate-800">{it.description}</td>
-              <td className="px-2 py-2.5 text-right text-slate-800">{it.qty}</td>
-              <td className="px-2 py-2.5 text-right text-slate-800">{inr.format(it.rate)}</td>
-              <td className="px-2 py-2.5 text-right font-medium text-slate-900">{inr.format(it.amount)}</td>
+              <td className="px-2 py-2.5 tabular-nums text-slate-500">{SAC_CODE}</td>
+              <td className="px-2 py-2.5 text-right tabular-nums text-slate-800">{it.qty}</td>
+              <td className="px-2 py-2.5 text-right tabular-nums text-slate-800">{inr.format(it.rate)}</td>
+              <td className="px-2 py-2.5 text-right font-medium tabular-nums text-slate-900">{inr.format(it.amount)}</td>
             </tr>
           ))}
         </tbody>
@@ -391,13 +528,15 @@ function InvoiceDocument({
         <div className="w-full sm:w-72">
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
-              <span className="text-slate-500">Subtotal</span>
+              <span className="text-slate-500">Taxable Value</span>
               <span className="tabular-nums text-slate-800">{inr.format(invoice.subtotal)}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Tax</span>
-              <span className="tabular-nums text-slate-800">{inr.format(invoice.tax_amount)}</span>
-            </div>
+            {taxLines.map((t) => (
+              <div key={t.label} className="flex justify-between">
+                <span className="text-slate-500">{t.label}</span>
+                <span className="tabular-nums text-slate-800">{inr.format(t.amount)}</span>
+              </div>
+            ))}
           </div>
           <div className="mt-2 flex items-center justify-between rounded-lg bg-brand px-4 py-2.5 text-white">
             <span className="font-semibold">Total</span>
@@ -407,11 +546,16 @@ function InvoiceDocument({
             <span className="text-slate-500">Amount Received</span>
             <span className="tabular-nums text-slate-700">{inr.format(received)}</span>
           </div>
+          {/* Overpaid invoices read as an advance held, not as a negative debt. */}
           <div
-            className={`mt-2 flex items-center justify-between rounded-lg px-4 py-3 ${outstanding <= 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
+            className={`mt-2 flex items-center justify-between rounded-lg px-4 py-3 ${outstanding <= EPSILON ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}
           >
-            <span className="text-xs font-semibold uppercase tracking-wide">Balance Due</span>
-            <span className="text-xl font-black tabular-nums">{inr.format(outstanding)}</span>
+            <span className="text-xs font-semibold uppercase tracking-wide">
+              {outstanding < -EPSILON ? "Advance Held" : "Balance Due"}
+            </span>
+            <span className="text-xl font-black tabular-nums">
+              {inr.format(Math.abs(outstanding))}
+            </span>
           </div>
         </div>
       </div>
@@ -422,14 +566,9 @@ function InvoiceDocument({
             This is a computer-generated invoice. Thank you for your business.
           </p>
           <div className="text-center">
-            <div className="mb-1 flex h-12 w-48 items-end justify-center border-b border-slate-300">
-              <span
-                style={{ fontFamily: '"Segoe Script", "Brush Script MT", cursive' }}
-                className="pb-1 text-2xl italic text-slate-700"
-              >
-                abc
-              </span>
-            </div>
+            {/* A ruled, empty signature line — a placeholder scribble here reads as
+                an unfinished document on anything that leaves the building. */}
+            <div className="mb-1 h-12 w-48 border-b border-slate-300" />
             <p className="text-xs text-slate-500">
               For <span className="font-semibold text-slate-700">{company?.name ?? "Company"}</span> — Authorised Signatory
             </p>
@@ -449,28 +588,31 @@ export default function InvoicePrintPage() {
   const [error, setError] = useState<string | null>(null);
   // Mac vs Windows — so the "Save as PDF" tip shows the right keys/steps.
   const [isMac, setIsMac] = useState(false);
+  // Today, as YYYY-MM-DD in the viewer's timezone. Null until mounted: the server
+  // renders in UTC and the browser in IST, so reading the clock during the first
+  // render would make the two disagree. Ageing simply shows as "not overdue"
+  // for the one frame before this lands.
+  const [todayIso, setTodayIso] = useState<string | null>(null);
 
-  // Selection + filters (all persisted to sessionStorage).
+  // Selection + Excel-style column filters (all persisted to sessionStorage).
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<string>("all");
-  const [customerId, setCustomerId] = useState<string>("all");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [duesOnly, setDuesOnly] = useState(false);
+  // Per-column value filters, Excel AutoFilter style. filters[col] is the list of
+  // ALLOWED values for that column; a column absent from the object = no filter
+  // (show everything). An empty array = show nothing (all values unticked).
+  const [filters, setFilters] = useState<Record<string, string[]>>({});
+  // Text typed into the currently-open filter dropdown's search box.
+  const [filterSearch, setFilterSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("invoice_no");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
-  // A single invoice that a row's 🖨 button asked to print, printed on its own.
+  // A single invoice that a row's print button asked to print, on its own.
   const [soloPrintId, setSoloPrintId] = useState<string | null>(null);
-  // Which column's filter dropdown is open (null = none).
+  // Which column's filter dropdown is open (null = none), and where to draw it.
+  // The panel is positioned `fixed` from the funnel button's screen rect, so the
+  // table's horizontal scroll container can't clip it and it can't slide under
+  // the sidebar on the leftmost columns.
   const [openFilter, setOpenFilter] = useState<SortKey | null>(null);
-  // Custom min/max amount filters, keyed by column (total / received / due).
-  const [ranges, setRanges] = useState<Record<string, { min: string; max: string }>>(freshRanges);
-  // Per-column filters for the remaining fields.
-  const [invNo, setInvNo] = useState(""); // Invoice No. contains
-  const [dueFrom, setDueFrom] = useState(""); // Due Date range
-  const [dueTo, setDueTo] = useState("");
+  const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
   const restored = useRef(false);
 
@@ -480,18 +622,9 @@ export default function InvoicePrintPage() {
       const raw = sessionStorage.getItem(STORAGE_KEY);
       const s = raw ? JSON.parse(raw) : null;
       if (s) {
-        setSearch(s.search ?? "");
-        setStatus(s.status ?? "all");
-        setCustomerId(s.customerId ?? "all");
-        setFromDate(s.fromDate ?? "");
-        setToDate(s.toDate ?? "");
-        setDuesOnly(!!s.duesOnly);
+        setFilters(s.filters && typeof s.filters === "object" ? s.filters : {});
         setSortKey(s.sortKey ?? "invoice_no");
         setSortDir(s.sortDir ?? "asc");
-        setRanges(s.ranges && typeof s.ranges === "object" ? { ...freshRanges(), ...s.ranges } : freshRanges());
-        setInvNo(s.invNo ?? "");
-        setDueFrom(s.dueFrom ?? "");
-        setDueTo(s.dueTo ?? "");
       }
       let sel: string[] = Array.isArray(s?.selectedIds) ? s.selectedIds : [];
       const fromUrl = new URLSearchParams(window.location.search).get("id");
@@ -509,15 +642,12 @@ export default function InvoicePrintPage() {
     try {
       sessionStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({
-          search, status, customerId, fromDate, toDate, duesOnly, sortKey, sortDir, selectedIds, ranges,
-          invNo, dueFrom, dueTo,
-        })
+        JSON.stringify({ filters, sortKey, sortDir, selectedIds })
       );
     } catch {
       /* storage full / disabled — non-fatal */
     }
-  }, [search, status, customerId, fromDate, toDate, duesOnly, sortKey, sortDir, selectedIds, ranges, invNo, dueFrom, dueTo]);
+  }, [filters, sortKey, sortDir, selectedIds]);
 
   useEffect(() => {
     async function load() {
@@ -550,58 +680,69 @@ export default function InvoicePrintPage() {
     load();
   }, []);
 
-  // Detect the operating system once, on the client.
+  // Detect the operating system + read today's date once, on the client.
   useEffect(() => {
     const p = navigator.platform || "";
     const ua = navigator.userAgent || "";
     setIsMac(/Mac|iPhone|iPad|iPod/.test(p) || /Mac OS X/.test(ua));
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+    setTodayIso(local.toISOString().slice(0, 10));
   }, []);
 
-  // Every invoice enriched with received + due (outstanding) amounts.
+  // The open filter panel is anchored to a screen position, so once the page or
+  // the table scrolls (or the window resizes) that position is stale — close it.
+  useEffect(() => {
+    if (!openFilter) return;
+    const close = () => setOpenFilter(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [openFilter]);
+
+  // Every invoice enriched with received, due (outstanding), how many days it has
+  // slipped past its due date, and the status we actually display.
   const allRows: Row[] = useMemo(
     () =>
       invoices.map((i) => {
         const received = receivedByInvoice[i.id] ?? 0;
-        return { ...i, received, due: i.total - received };
+        const due = i.total - received;
+        const overdueDays =
+          todayIso && due > EPSILON ? daysPast(i.due_date, todayIso) : 0;
+        return { ...i, received, due, overdueDays, effStatus: derivedStatus(due, received, overdueDays) };
       }),
-    [invoices, receivedByInvoice]
+    [invoices, receivedByInvoice, todayIso]
   );
 
-  // Customers that actually appear on invoices, for the customer filter.
-  const customerOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    for (const r of allRows) {
-      if (r.customers?.id) seen.set(r.customers.id, r.customers.name);
+  // Distinct values for every filterable column (Excel's AutoFilter value list),
+  // each already sorted the way that column should sort.
+  const columnOptions = useMemo(() => {
+    const cols: SortKey[] = [
+      "invoice_no", "invoice_date", "due_date", "customer", "total", "received", "due", "status",
+    ];
+    const out: Record<string, string[]> = {};
+    for (const col of cols) {
+      const vals = [...new Set(allRows.map((r) => rowKey(r, col)))];
+      if (col === "total" || col === "received" || col === "due") vals.sort((a, b) => Number(a) - Number(b));
+      else if (col === "invoice_date" || col === "due_date") vals.sort();
+      else vals.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      out[col] = vals;
     }
-    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    return out;
   }, [allRows]);
 
-  // Apply all filters, then sort.
+  // Apply every active column filter (a row must match ALL of them), then sort.
   const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const rows = allRows.filter((r) => {
-      if (status !== "all" && r.status !== status) return false;
-      if (customerId !== "all" && r.customers?.id !== customerId) return false;
-      if (fromDate && r.invoice_date < fromDate) return false;
-      if (toDate && r.invoice_date > toDate) return false;
-      if (dueFrom && r.due_date < dueFrom) return false;
-      if (dueTo && r.due_date > dueTo) return false;
-      if (invNo && !r.invoice_no.toLowerCase().includes(invNo.trim().toLowerCase())) return false;
-      if (duesOnly && r.due <= 0) return false;
-      for (const col of ["total", "received", "due"] as const) {
-        const { min, max } = ranges[col];
-        if (min !== "" && r[col] < Number(min)) return false;
-        if (max !== "" && r[col] > Number(max)) return false;
-      }
-      if (q) {
-        const hay = `${r.invoice_no} ${r.customers?.name ?? ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+    const active = Object.entries(filters).filter(([, v]) => Array.isArray(v)) as [SortKey, string[]][];
+    const rows = allRows.filter((r) =>
+      active.every(([col, allowed]) => allowed.includes(rowKey(r, col)))
+    );
     const dir = sortDir === "asc" ? 1 : -1;
     return rows.sort((a, b) => compareRows(a, b, sortKey) * dir);
-  }, [allRows, search, status, customerId, fromDate, toDate, duesOnly, sortKey, sortDir, ranges, invNo, dueFrom, dueTo]);
+  }, [allRows, filters, sortKey, sortDir]);
 
   const selectedRows = useMemo(
     () => allRows.filter((r) => selectedIds.includes(r.id)),
@@ -632,12 +773,7 @@ export default function InvoicePrintPage() {
   const visibleIds = visibleRows.map((r) => r.id);
   const allVisibleSelected =
     visibleRows.length > 0 && visibleRows.every((r) => selectedIds.includes(r.id));
-  const rangesActive = ["total", "received", "due"].some(
-    (c) => ranges[c].min !== "" || ranges[c].max !== ""
-  );
-  const hasFilters =
-    !!search || status !== "all" || customerId !== "all" || !!fromDate || !!toDate || duesOnly ||
-    rangesActive || !!invNo || !!dueFrom || !!dueTo;
+  const hasFilters = Object.values(filters).some((v) => Array.isArray(v));
 
   function toggleOne(id: string) {
     setSelectedIds((prev) =>
@@ -663,20 +799,7 @@ export default function InvoicePrintPage() {
   }
 
   function clearFilters() {
-    setSearch("");
-    setStatus("all");
-    setCustomerId("all");
-    setFromDate("");
-    setToDate("");
-    setDuesOnly(false);
-    setRanges(freshRanges());
-    setInvNo("");
-    setDueFrom("");
-    setDueTo("");
-  }
-
-  function setRange(col: string, part: "min" | "max", value: string) {
-    setRanges((prev) => ({ ...prev, [col]: { ...prev[col], [part]: value } }));
+    setFilters({});
   }
 
   // Export to CSV: the ticked invoices if any are selected, otherwise the whole
@@ -688,42 +811,103 @@ export default function InvoicePrintPage() {
     downloadCsv(`invoices-${scope}-${rows.length}.csv`, buildInvoiceCsv(rows));
   }
 
-  // Column totals across the filtered rows — the finance-desk footer.
+  // Column totals across the filtered rows — the finance-desk footer, and the
+  // numbers behind the tiles at the top of the page.
   const totals = visibleRows.reduce(
     (acc, r) => {
       acc.total += r.total;
       acc.received += r.received;
       acc.due += r.due;
+      if (r.effStatus === "overdue") {
+        acc.overdueAmount += r.due;
+        acc.overdueCount += 1;
+      }
       return acc;
     },
-    { total: 0, received: 0, due: 0 }
+    { total: 0, received: 0, due: 0, overdueAmount: 0, overdueCount: 0 }
   );
+  const collectedPct = totals.total > 0 ? Math.round((totals.received / totals.total) * 100) : 0;
 
-  // A column header: click the label to sort; the funnel opens a filter menu
-  // right on the column — a pick-list for Customer/Status, or a custom
-  // min–max amount range for Total/Received/Due.
+  // A column header: click the label to sort; the funnel opens an Excel-style
+  // filter — a searchable checklist of that column's values, with "Select all".
   function ColumnHeader({
     label,
     col,
     align = "left",
-    filterType,
+    hint,
   }: {
     label: string;
     col: SortKey;
     align?: "left" | "right";
-    filterType?: "status" | "customer" | "range" | "text" | "invdate" | "duedate";
+    hint?: string;
   }) {
     const active = sortKey === col;
-    const filterActive =
-      (filterType === "status" && status !== "all") ||
-      (filterType === "customer" && customerId !== "all") ||
-      (filterType === "range" && (ranges[col]?.min !== "" || ranges[col]?.max !== "")) ||
-      (filterType === "text" && invNo !== "") ||
-      (filterType === "invdate" && (fromDate !== "" || toDate !== "")) ||
-      (filterType === "duedate" && (dueFrom !== "" || dueTo !== ""));
+    const sel = filters[col]; // undefined = no filter (every value passes)
+    const filterActive = Array.isArray(sel);
+    const options = columnOptions[col] ?? [];
+    const open = openFilter === col;
+
+    const isChecked = (v: string) => !sel || sel.includes(v);
+    const shown = options.filter((v) =>
+      keyLabel(col, v).toLowerCase().includes(filterSearch.trim().toLowerCase())
+    );
+    const allShownChecked = shown.length > 0 && shown.every(isChecked);
+    const someShownChecked = shown.some(isChecked);
+
+    // Store `next` as this column's filter, collapsing "everything selected" back
+    // to no-filter so the funnel doesn't look active when nothing is excluded.
+    function apply(next: string[]) {
+      setFilters((prev) => {
+        const n = { ...prev };
+        if (next.length === options.length) delete n[col];
+        else n[col] = next;
+        return n;
+      });
+    }
+    function toggleValue(v: string) {
+      const base = sel ? [...sel] : [...options];
+      apply(base.includes(v) ? base.filter((x) => x !== v) : [...base, v]);
+    }
+    function toggleSelectAll() {
+      const base = sel ? [...sel] : [...options];
+      apply(
+        allShownChecked
+          ? base.filter((v) => !shown.includes(v))
+          : [...new Set([...base, ...shown])]
+      );
+    }
+    function clearColumn() {
+      setFilters((prev) => {
+        const n = { ...prev };
+        delete n[col];
+        return n;
+      });
+    }
+
+    // Open the panel under this funnel, nudged so it always stays fully on
+    // screen: never past the right edge, never left of the sidebar, and flipped
+    // above the header if there isn't room below.
+    function openPanel(e: React.MouseEvent<HTMLButtonElement>) {
+      setFilterSearch("");
+      if (open) {
+        setOpenFilter(null);
+        return;
+      }
+      const r = e.currentTarget.getBoundingClientRect();
+      const W = 256; // w-64
+      const H = 380; // roughly the panel's tallest form
+      const left = Math.min(Math.max(8, r.right - W), window.innerWidth - W - 8);
+      const below = r.bottom + 6;
+      const top = below + H > window.innerHeight ? Math.max(8, r.top - 6 - H) : below;
+      setFilterPos({ top, left });
+      setOpenFilter(col);
+    }
+
     return (
-      <th className={`px-2 py-2.5 ${align === "right" ? "text-right" : "text-left"}`}>
-        <div className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+      <th className={`px-2 py-2.5 ${align === "right" ? "text-right" : "text-left"}`} title={hint}>
+        {/* Label then funnel, in that order, on every column — only the whole
+            group shifts side, so the funnels line up with their headings. */}
+        <div className="inline-flex items-center gap-1">
           <button
             onClick={() => handleSort(col)}
             className={`inline-flex items-center gap-1 hover:text-slate-700 ${active ? "text-slate-900" : ""}`}
@@ -731,165 +915,104 @@ export default function InvoicePrintPage() {
             {label}
             <SortIcon dir={active ? sortDir : null} />
           </button>
-          {filterType && (
-            <div className="relative">
-              <button
-                onClick={() => setOpenFilter(openFilter === col ? null : col)}
-                className={`rounded p-0.5 hover:bg-slate-200 ${filterActive ? "text-brand" : "text-slate-400"}`}
-                title={`Filter by ${label.toLowerCase()}`}
-              >
-                <FunnelIcon active={filterActive} />
-              </button>
-              {openFilter === col && (
-                <>
-                  {/* click-away backdrop */}
-                  <div className="fixed inset-0 z-10" onClick={() => setOpenFilter(null)} />
-                  <div className="absolute right-0 z-20 mt-1 max-h-72 w-56 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 text-left font-normal normal-case tracking-normal text-slate-700 shadow-lg">
-                    {filterType === "status" &&
-                      STATUS_OPTIONS.map((o) => (
-                        <button
-                          key={o.value}
-                          onClick={() => {
-                            setStatus(o.value);
-                            setOpenFilter(null);
-                          }}
-                          className={`block w-full rounded px-3 py-1.5 text-left text-sm hover:bg-slate-100 ${status === o.value ? "font-semibold text-brand" : ""}`}
+          <div>
+            <button
+              onClick={openPanel}
+              className={`rounded p-0.5 hover:bg-slate-200 ${filterActive ? "text-brand" : "text-slate-400"}`}
+              title={`Filter ${label.toLowerCase()}`}
+            >
+              <FunnelIcon active={filterActive} />
+            </button>
+            {open && filterPos && (
+              <>
+                {/* click-away backdrop */}
+                <div className="fixed inset-0 z-40" onClick={() => setOpenFilter(null)} />
+                <div
+                  style={{ top: filterPos.top, left: filterPos.left }}
+                  className="fixed z-50 w-64 rounded-lg border border-slate-200 bg-white text-left font-normal normal-case tracking-normal text-slate-700 shadow-xl"
+                >
+                  {/* search box */}
+                  <div className="border-b border-slate-100 p-2">
+                    <input
+                      autoFocus
+                      type="text"
+                      value={filterSearch}
+                      onChange={(e) => setFilterSearch(e.target.value)}
+                      placeholder={`Search ${label.toLowerCase()}…`}
+                      className={`${inputClass} w-full`}
+                    />
+                  </div>
+                  {/* (Select all) */}
+                  <label className="flex cursor-pointer items-center gap-2 border-b border-slate-100 px-3 py-1.5 text-sm font-medium hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-brand"
+                      checked={allShownChecked}
+                      ref={(el) => {
+                        if (el) el.indeterminate = !allShownChecked && someShownChecked;
+                      }}
+                      onChange={toggleSelectAll}
+                    />
+                    (Select all{filterSearch ? " shown" : ""})
+                  </label>
+                  {/* value checklist */}
+                  <div className="max-h-60 overflow-y-auto py-1">
+                    {shown.length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-slate-400">No matches.</p>
+                    ) : (
+                      shown.map((v) => (
+                        <label
+                          key={v}
+                          className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-50"
                         >
-                          {o.label}
-                        </button>
-                      ))}
-                    {filterType === "customer" && (
-                      <>
-                        <button
-                          onClick={() => {
-                            setCustomerId("all");
-                            setOpenFilter(null);
-                          }}
-                          className={`block w-full rounded px-3 py-1.5 text-left text-sm hover:bg-slate-100 ${customerId === "all" ? "font-semibold text-brand" : ""}`}
-                        >
-                          All customers
-                        </button>
-                        {customerOptions.map(([id, name]) => (
-                          <button
-                            key={id}
-                            onClick={() => {
-                              setCustomerId(id);
-                              setOpenFilter(null);
-                            }}
-                            className={`block w-full rounded px-3 py-1.5 text-left text-sm hover:bg-slate-100 ${customerId === id ? "font-semibold text-brand" : ""}`}
-                          >
-                            {name}
-                          </button>
-                        ))}
-                      </>
-                    )}
-                    {filterType === "range" && (
-                      <div className="p-2">
-                        <p className="mb-2 px-1 text-xs font-semibold text-slate-500">
-                          {label} between (₹)
-                        </p>
-                        <div className="flex items-center gap-2 px-1">
                           <input
-                            type="number"
-                            placeholder="Min"
-                            value={ranges[col]?.min ?? ""}
-                            onChange={(e) => setRange(col, "min", e.target.value)}
-                            className={`${inputClass} w-20`}
+                            type="checkbox"
+                            className="h-4 w-4 shrink-0 accent-brand"
+                            checked={isChecked(v)}
+                            onChange={() => toggleValue(v)}
                           />
-                          <span className="text-slate-400">–</span>
-                          <input
-                            type="number"
-                            placeholder="Max"
-                            value={ranges[col]?.max ?? ""}
-                            onChange={(e) => setRange(col, "max", e.target.value)}
-                            className={`${inputClass} w-20`}
-                          />
-                        </div>
-                        <div className="mt-2 flex items-center justify-between px-1">
-                          <button
-                            onClick={() => setRanges((prev) => ({ ...prev, [col]: { min: "", max: "" } }))}
-                            className="text-xs font-medium text-slate-500 hover:text-slate-700"
-                          >
-                            Clear
-                          </button>
-                          <button
-                            onClick={() => setOpenFilter(null)}
-                            className="rounded bg-brand px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
-                          >
-                            Done
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {filterType === "text" && (
-                      <div className="p-2">
-                        <p className="mb-2 px-1 text-xs font-semibold text-slate-500">Invoice number contains</p>
-                        <input
-                          type="text"
-                          placeholder="e.g. INV-0001"
-                          value={invNo}
-                          onChange={(e) => setInvNo(e.target.value)}
-                          className={`${inputClass} w-full`}
-                          autoFocus
-                        />
-                        <div className="mt-2 flex items-center justify-between px-1">
-                          <button onClick={() => setInvNo("")} className="text-xs font-medium text-slate-500 hover:text-slate-700">
-                            Clear
-                          </button>
-                          <button onClick={() => setOpenFilter(null)} className="rounded bg-brand px-3 py-1 text-xs font-semibold text-white hover:opacity-90">
-                            Done
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {(filterType === "invdate" || filterType === "duedate") && (
-                      <div className="p-2">
-                        <p className="mb-2 px-1 text-xs font-semibold text-slate-500">{label} between</p>
-                        <div className="flex flex-col gap-2 px-1">
-                          <input
-                            type="date"
-                            value={filterType === "invdate" ? fromDate : dueFrom}
-                            onChange={(e) =>
-                              filterType === "invdate" ? setFromDate(e.target.value) : setDueFrom(e.target.value)
-                            }
-                            className={`${inputClass} w-full`}
-                          />
-                          <input
-                            type="date"
-                            value={filterType === "invdate" ? toDate : dueTo}
-                            onChange={(e) =>
-                              filterType === "invdate" ? setToDate(e.target.value) : setDueTo(e.target.value)
-                            }
-                            className={`${inputClass} w-full`}
-                          />
-                        </div>
-                        <div className="mt-2 flex items-center justify-between px-1">
-                          <button
-                            onClick={() => {
-                              if (filterType === "invdate") {
-                                setFromDate("");
-                                setToDate("");
-                              } else {
-                                setDueFrom("");
-                                setDueTo("");
-                              }
-                            }}
-                            className="text-xs font-medium text-slate-500 hover:text-slate-700"
-                          >
-                            Clear
-                          </button>
-                          <button onClick={() => setOpenFilter(null)} className="rounded bg-brand px-3 py-1 text-xs font-semibold text-white hover:opacity-90">
-                            Done
-                          </button>
-                        </div>
-                      </div>
+                          <span className="truncate">{keyLabel(col, v)}</span>
+                        </label>
+                      ))
                     )}
                   </div>
-                </>
-              )}
-            </div>
-          )}
+                  {/* footer */}
+                  <div className="flex items-center justify-between border-t border-slate-100 p-2">
+                    <button
+                      onClick={clearColumn}
+                      className="text-xs font-medium text-slate-500 hover:text-slate-700"
+                    >
+                      Clear filter
+                    </button>
+                    <button
+                      onClick={() => setOpenFilter(null)}
+                      className="rounded bg-brand px-3 py-1 text-xs font-semibold text-white hover:opacity-90"
+                    >
+                      OK
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
+      </th>
+    );
+  }
+
+  /* A sortable header with no filter funnel — for ageing, where a checklist of
+     every distinct day-count would be useless. */
+  function PlainHeader({ label, col }: { label: string; col: SortKey }) {
+    const active = sortKey === col;
+    return (
+      <th className="px-2 py-2.5 text-right">
+        <button
+          onClick={() => handleSort(col)}
+          className={`inline-flex items-center gap-1 hover:text-slate-700 ${active ? "text-slate-900" : ""}`}
+        >
+          {label}
+          <SortIcon dir={active ? sortDir : null} />
+        </button>
       </th>
     );
   }
@@ -931,6 +1054,50 @@ export default function InvoicePrintPage() {
         {error && (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
+          </div>
+        )}
+
+        {/* Headline numbers — what a room reads first. These follow the filters,
+            so they always describe the list actually on screen. */}
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile
+            label="Total Invoiced"
+            value={inr.format(totals.total)}
+            hint={`${visibleRows.length} invoice${visibleRows.length === 1 ? "" : "s"}`}
+          />
+          <StatTile
+            label="Received"
+            value={inr.format(totals.received)}
+            hint={`${collectedPct}% collected`}
+            tone="good"
+          />
+          <StatTile
+            label="Outstanding"
+            value={inr.format(totals.due)}
+            hint="Allocated receipts only"
+          />
+          <StatTile
+            label="Overdue"
+            value={inr.format(totals.overdueAmount)}
+            hint={`${totals.overdueCount} invoice${totals.overdueCount === 1 ? "" : "s"} past due`}
+            tone={totals.overdueCount > 0 ? "bad" : "good"}
+          />
+        </div>
+
+        {/* A filtered list is a subset — say so, loudly, so nobody quotes a
+            partial total as if it were the whole book. */}
+        {hasFilters && (
+          <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <span>
+              <strong>Filtered view</strong> — showing {visibleRows.length} of {allRows.length} invoices.
+              The tiles and totals below describe only these rows.
+            </span>
+            <button
+              onClick={clearFilters}
+              className="shrink-0 font-semibold underline underline-offset-2 hover:text-amber-900"
+            >
+              Show all
+            </button>
           </div>
         )}
 
@@ -977,17 +1144,30 @@ export default function InvoicePrintPage() {
 
         {/* Invoice table */}
         {loading ? (
-          <div className="mb-6 rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-400">
-            Loading invoices…
-          </div>
-        ) : visibleRows.length === 0 ? (
-          <div className="mb-6 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-10 text-center text-slate-400">
-            No invoices match these filters.
+          /* Skeleton rows rather than a bare "Loading…" line: the table's shape
+             shows up immediately, so the wait reads as filling-in, not hanging. */
+          <div className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs font-medium uppercase tracking-wide text-slate-400">
+              Loading invoices…
+            </div>
+            <div className="animate-pulse divide-y divide-slate-100">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4 px-4 py-3">
+                  <div className="h-4 w-4 shrink-0 rounded bg-slate-200" />
+                  <div className="h-3 w-24 rounded bg-slate-200" />
+                  <div className="h-3 w-20 rounded bg-slate-100" />
+                  <div className="h-3 flex-1 rounded bg-slate-100" />
+                  <div className="h-3 w-24 rounded bg-slate-200" />
+                  <div className="h-3 w-16 rounded bg-slate-100" />
+                  <div className="h-5 w-16 shrink-0 rounded-full bg-slate-100" />
+                </div>
+              ))}
+            </div>
           </div>
         ) : (
           <div className="mb-6 overflow-x-auto rounded-xl border border-slate-200 bg-white">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-[5]">
                 <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <th className="w-12 px-4 py-2.5">
                     <input
@@ -998,49 +1178,78 @@ export default function InvoicePrintPage() {
                       title="Select all shown"
                     />
                   </th>
-                  <ColumnHeader label="Invoice No." col="invoice_no" filterType="text" />
-                  <ColumnHeader label="Date" col="invoice_date" filterType="invdate" />
-                  <ColumnHeader label="Due Date" col="due_date" filterType="duedate" />
-                  <ColumnHeader label="Customer" col="customer" filterType="customer" />
-                  <ColumnHeader label="Total" col="total" align="right" filterType="range" />
-                  <ColumnHeader label="Received" col="received" align="right" filterType="range" />
-                  <ColumnHeader label="Due" col="due" align="right" filterType="range" />
-                  <ColumnHeader label="Status" col="status" align="right" filterType="status" />
+                  <ColumnHeader label="Invoice No." col="invoice_no" />
+                  <ColumnHeader label="Date" col="invoice_date" />
+                  <ColumnHeader label="Due Date" col="due_date" />
+                  <ColumnHeader label="Customer" col="customer" />
+                  <ColumnHeader label="Total" col="total" align="right" />
+                  <ColumnHeader
+                    label="Received"
+                    col="received"
+                    align="right"
+                    hint="Receipts allocated against this invoice. Money received on account but not yet knocked off does not appear here."
+                  />
+                  <ColumnHeader label="Due" col="due" align="right" />
+                  <PlainHeader label="Days Overdue" col="overdue_days" />
+                  <ColumnHeader label="Status" col="status" align="right" />
                   <th className="px-4 py-2.5 text-right">Print</th>
                 </tr>
               </thead>
               <tbody>
+                {visibleRows.length === 0 && (
+                  <tr>
+                    <td colSpan={11} className="px-4 py-10 text-center text-slate-400">
+                      No invoices match these filters. Open a column’s filter to adjust.
+                    </td>
+                  </tr>
+                )}
                 {visibleRows.map((r) => (
+                  /* Selection is on the checkbox only. A whole-row click meant that
+                     pointing at a figure during a demo silently ticked an invoice. */
                   <tr
                     key={r.id}
-                    onClick={() => toggleOne(r.id)}
-                    className={`cursor-pointer border-b border-slate-100 last:border-0 hover:bg-slate-50 ${selectedIds.includes(r.id) ? "bg-blue-50/50" : ""}`}
+                    className={`border-b border-slate-100 last:border-0 hover:bg-slate-50 ${selectedIds.includes(r.id) ? "bg-brand/5" : ""}`}
                   >
                     <td className="px-4 py-2.5">
                       <input
                         type="checkbox"
                         checked={selectedIds.includes(r.id)}
                         onChange={() => toggleOne(r.id)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="h-4 w-4 accent-brand"
+                        className="h-4 w-4 cursor-pointer accent-brand"
+                        title={`Select invoice ${r.invoice_no}`}
                       />
                     </td>
-                    <td className="px-2 py-2.5 font-medium text-slate-900">{r.invoice_no}</td>
-                    <td className="px-2 py-2.5 text-slate-600">{formatDate(r.invoice_date)}</td>
-                    <td className="px-2 py-2.5 text-slate-600">{formatDate(r.due_date)}</td>
+                    <td className="px-2 py-2.5 font-medium tabular-nums text-slate-900">{r.invoice_no}</td>
+                    <td className="px-2 py-2.5 tabular-nums text-slate-600">{formatDate(r.invoice_date)}</td>
+                    <td className="px-2 py-2.5 tabular-nums text-slate-600">{formatDate(r.due_date)}</td>
                     <td className="px-2 py-2.5 text-slate-800">{r.customers?.name}</td>
-                    <td className="px-2 py-2.5 text-right text-slate-800">{inr.format(r.total)}</td>
-                    <td className="px-2 py-2.5 text-right text-slate-600">{inr.format(r.received)}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-800">{inr.format(r.total)}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-600">{inr.format(r.received)}</td>
+                    {/* Red is reserved for money that is actually late — otherwise a
+                        perfectly healthy ledger reads as a crisis. */}
                     <td
-                      className={`px-2 py-2.5 text-right font-medium ${r.due > 0 ? "text-red-600" : "text-green-600"}`}
+                      className={`px-2 py-2.5 text-right font-medium tabular-nums ${
+                        r.effStatus === "overdue"
+                          ? "text-red-600"
+                          : r.due > EPSILON
+                            ? "text-slate-800"
+                            : "text-green-600"
+                      }`}
                     >
-                      {inr.format(r.due)}
+                      {r.due < -EPSILON ? `(${inr.format(-r.due)})` : inr.format(r.due)}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums">
+                      {r.overdueDays > 0 ? (
+                        <span className="font-semibold text-red-600">{r.overdueDays}</span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="px-2 py-2.5 text-right">
                       <span
-                        className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase ${STATUS_STYLES[r.status] ?? "bg-slate-100 text-slate-600"}`}
+                        className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase ${STATUS_STYLES[r.effStatus] ?? "bg-slate-100 text-slate-600"}`}
                       >
-                        {r.status}
+                        {r.effStatus}
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-right">
@@ -1058,15 +1267,15 @@ export default function InvoicePrintPage() {
                   </tr>
                 ))}
               </tbody>
-              <tfoot>
+              <tfoot className={visibleRows.length === 0 ? "hidden" : ""}>
                 <tr className="border-t-2 border-slate-300 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600">
                   <td className="px-4 py-2.5" colSpan={5}>
                     {visibleRows.length} invoice{visibleRows.length === 1 ? "" : "s"}
                   </td>
-                  <td className="px-2 py-2.5 text-right text-slate-900">{inr.format(totals.total)}</td>
-                  <td className="px-2 py-2.5 text-right text-slate-700">{inr.format(totals.received)}</td>
-                  <td className="px-2 py-2.5 text-right text-red-600">{inr.format(totals.due)}</td>
-                  <td className="px-2 py-2.5" colSpan={2} />
+                  <td className="px-2 py-2.5 text-right tabular-nums text-slate-900">{inr.format(totals.total)}</td>
+                  <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{inr.format(totals.received)}</td>
+                  <td className="px-2 py-2.5 text-right tabular-nums text-red-600">{inr.format(totals.due)}</td>
+                  <td className="px-2 py-2.5" colSpan={3} />
                 </tr>
               </tfoot>
             </table>
@@ -1103,7 +1312,12 @@ export default function InvoicePrintPage() {
             key={r.id}
             className={idx < printRows.length - 1 ? "print:break-after-page" : ""}
           >
-            <InvoiceDocument invoice={r} company={company} received={r.received} />
+            <InvoiceDocument
+              invoice={r}
+              company={company}
+              received={r.received}
+              status={r.effStatus}
+            />
           </div>
         ))}
       </div>
