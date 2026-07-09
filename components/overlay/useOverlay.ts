@@ -118,10 +118,19 @@ export function useOverlay({ open, getAnchorEl, onClose, width, align = "left", 
     setPos((prev) => (samePlacement(prev, next) ? prev : next));
   }, [width, align]);
 
-  // measure + place before paint (no flicker)
+  // measure + place before paint (no flicker). We place synchronously, then again
+  // on the next frame: the first pass can run before the portal node has its real
+  // size (or before the anchor ref is attached), which would leave the menu parked
+  // off-screen until a scroll nudged a re-measure. The rAF pass corrects it right
+  // away so the menu appears in the right spot without needing to scroll.
   useLayoutEffect(() => {
-    if (open) place();
-    else setPos(null);
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    place();
+    const raf = requestAnimationFrame(() => place());
+    return () => cancelAnimationFrame(raf);
   }, [open, place]);
 
   useEffect(() => {
