@@ -7,15 +7,18 @@ import { supabase } from "@/lib/supabase";
 import type {
   Company,
   Customer,
+  GLAccount,
   Invoice,
   InvoiceItem,
   InvoiceStatus,
 } from "@/lib/types";
 import { formatMoney } from "@/lib/balances";
+import { invoiceGlImpact } from "@/lib/gl";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { VerveLogo } from "@/components/VerveLogo";
 import { CollectionFollowups } from "@/components/CollectionFollowups";
+import { GlImpactReview } from "@/components/GlImpactReview";
 
 /*
   Sales Invoice — View (one invoice in full detail, with amount still outstanding).
@@ -156,6 +159,7 @@ export default function InvoiceViewPage() {
   const [company, setCompany] = useState<Company | null>(null);
   const [items, setItems] = useState<InvoiceItem[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -188,8 +192,9 @@ export default function InvoiceViewPage() {
       const inv = invRes.data as Invoice;
       setInvoice(inv);
 
-      // 2) Everything hanging off it, in parallel.
-      const [custRes, coRes, itemRes, allocRes] = await Promise.all([
+      // 2) Everything hanging off it, in parallel (including the chart of
+      // accounts, for the GL impact preview).
+      const [custRes, coRes, itemRes, allocRes, glRes] = await Promise.all([
         supabase.from("customers").select("*").eq("id", inv.customer_id).maybeSingle(),
         supabase.from("company").select("*").limit(1).maybeSingle(),
         supabase.from("invoice_items").select("*").eq("invoice_id", inv.id),
@@ -197,15 +202,17 @@ export default function InvoiceViewPage() {
           .from("receipt_allocations")
           .select("id, amount, receipts ( receipt_no, receipt_date, mode, reference )")
           .eq("invoice_id", inv.id),
+        supabase.from("gl_accounts").select("*"),
       ]);
       if (cancelled) return;
 
-      const firstErr = custRes.error || coRes.error || itemRes.error || allocRes.error;
+      const firstErr = custRes.error || coRes.error || itemRes.error || allocRes.error || glRes.error;
       if (firstErr) setError(firstErr.message);
 
       setCustomer((custRes.data as Customer) ?? null);
       setCompany((coRes.data as Company) ?? null);
       setItems((itemRes.data as InvoiceItem[]) ?? []);
+      setGlAccounts(glRes.data ?? []);
 
       const allocs = (allocRes.data as unknown as AllocationRow[]) ?? [];
       setPayments(
@@ -308,6 +315,15 @@ export default function InvoiceViewPage() {
         { label: `SGST @ ${halfPct}%`, amount: taxTotal / 2 },
       ]
     : [{ label: `IGST @ ${taxPct}%`, amount: taxTotal }];
+
+  // Debit/credit preview for GL Master — reuses the same intra/inter-state
+  // split as the printed tax breakup above, just reshaped for invoiceGlImpact.
+  const glImpact = invoiceGlImpact(glAccounts, {
+    subtotal: subtotalVal,
+    gst: isMaharashtra
+      ? { intraState: true, customerState: "Maharashtra", cgst: taxTotal / 2, sgst: taxTotal / 2, igst: 0 }
+      : { intraState: false, customerState: customer?.address ?? null, cgst: 0, sgst: 0, igst: taxTotal },
+  });
 
   /**
    * Personalised plain-text invoice message for WhatsApp — every value is pulled
@@ -806,6 +822,11 @@ export default function InvoiceViewPage() {
             For {company?.name ?? "Verve Advisory"} · This is a computer-generated invoice.
           </p>
         </div>
+      </div>
+
+      {/* GL Impact Review (internal accounting view — screen only) */}
+      <div className="mt-6 print:hidden">
+        <GlImpactReview lines={glImpact} />
       </div>
 
       {/* Payments knocked off against this invoice (screen only) */}

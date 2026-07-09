@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
-import type { Customer, Invoice, Receipt, ReceiptAllocation, ReceiptMode } from "@/lib/types";
+import type { Customer, GLAccount, Invoice, InvoiceItem, Receipt, ReceiptAllocation, ReceiptMode } from "@/lib/types";
 import { DataTable, type Column } from "@/components/DataTable";
 import { FormField, inputClass } from "@/components/FormField";
 import { PageHeader } from "@/components/PageHeader";
@@ -10,6 +11,7 @@ import { NotConfigured } from "@/components/NotConfigured";
 import { formatMoney } from "@/lib/balances";
 import { Icon } from "@/components/icons";
 import { Popover } from "@/components/overlay";
+import { type Deduction, setReceiptExtras, deductionTotal } from "@/lib/receiptExtras";
 
 /*
   Receipt Entry — record money received from a customer and "knock it off"
@@ -38,6 +40,8 @@ export default function ReceiptEntryPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [allocations, setAllocations] = useState<ReceiptAllocation[]>([]);
+  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
+  const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -52,6 +56,10 @@ export default function ReceiptEntryPage() {
   const [reference, setReference] = useState("");
   // invoice_id -> allocation amount typed by the user
   const [alloc, setAlloc] = useState<Record<string, string>>({});
+  // invoice_id -> which service(s) this allocation is for (defaults to that invoice's line items)
+  const [serviceNotes, setServiceNotes] = useState<Record<string, string>>({});
+  const [deductions, setDeductions] = useState<Deduction[]>([]);
+  const [showDeductions, setShowDeductions] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // sorting + filtering for the allocation table
@@ -66,19 +74,23 @@ export default function ReceiptEntryPage() {
   async function loadAll() {
     if (!supabase) return;
     setLoading(true);
-    const [r, c, i, a] = await Promise.all([
+    const [r, c, i, a, g, ii] = await Promise.all([
       supabase.from("receipts").select("*").order("receipt_date", { ascending: false }).order("receipt_no", { ascending: false }),
       supabase.from("customers").select("*").order("name"),
       supabase.from("invoices").select("*").order("due_date"),
       supabase.from("receipt_allocations").select("*"),
+      supabase.from("gl_accounts").select("*"),
+      supabase.from("invoice_items").select("*"),
     ]);
-    const err = r.error ?? c.error ?? i.error ?? a.error;
+    const err = r.error ?? c.error ?? i.error ?? a.error ?? g.error ?? ii.error;
     if (err) setError(err.message);
     else {
       setReceipts(r.data ?? []);
       setCustomers(c.data ?? []);
       setInvoices(i.data ?? []);
       setAllocations(a.data ?? []);
+      setGlAccounts(g.data ?? []);
+      setInvoiceItems(ii.data ?? []);
     }
     setLoading(false);
   }
@@ -92,6 +104,16 @@ export default function ReceiptEntryPage() {
     () => new Map(customers.map((c) => [c.id, c])),
     [customers],
   );
+
+  /** invoice_id -> comma-joined service descriptions, for the default "Services" note. */
+  const servicesByInvoice = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of invoiceItems) {
+      const prev = m.get(it.invoice_id);
+      m.set(it.invoice_id, prev ? `${prev}, ${it.description}` : it.description);
+    }
+    return m;
+  }, [invoiceItems]);
 
   /** invoice_id -> already-allocated total (from ALL receipts so far). */
   const allocatedByInvoice = useMemo(() => {
@@ -128,8 +150,12 @@ export default function ReceiptEntryPage() {
   }, [openInvoices, filters, sort]);
 
   const amountNum = Number(amount) || 0;
+  const deductionsTotal = deductionTotal(deductions);
+  // Deductions (TDS, bank charges…) count as "accounted for" money even though
+  // it never hits the bank — so they free up allocation room the same as cash.
+  const availableToAllocate = amountNum + deductionsTotal;
   const allocTotal = openInvoices.reduce((s, inv) => s + (Number(alloc[inv.id]) || 0), 0);
-  const unallocated = amountNum - allocTotal;
+  const unallocated = availableToAllocate - allocTotal;
 
   if (!supabase) return <NotConfigured />;
 
@@ -141,6 +167,9 @@ export default function ReceiptEntryPage() {
     setMode("neft");
     setReference("");
     setAlloc({});
+    setServiceNotes({});
+    setDeductions([]);
+    setShowDeductions(false);
     setFilters({ invoice_no: "", due_date: "", total: "", outstanding: "" });
     setSort({ key: "due_date", dir: 1 });
     setSuccess(null);
@@ -161,9 +190,9 @@ export default function ReceiptEntryPage() {
     setAlloc((a) => ({ ...a, [inv.id]: checked ? inv.outstanding.toFixed(2) : "" }));
   }
 
-  /** Spread the receipt amount over open invoices, oldest due date first. */
+  /** Spread the receipt (cash + deductions) over open invoices, oldest due date first. */
   function autoAllocate() {
-    let left = amountNum;
+    let left = availableToAllocate;
     const next: Record<string, string> = {};
     for (const inv of openInvoices) {
       if (left <= 0) break;
@@ -186,8 +215,10 @@ export default function ReceiptEntryPage() {
       if (v > inv.outstanding + 0.005)
         return setError(`Allocation for ${inv.invoice_no} is more than its outstanding (${formatMoney(inv.outstanding)}).`);
     }
-    if (allocTotal > amountNum + 0.005)
-      return setError(`You've allocated ${formatMoney(allocTotal)} but the receipt is only ${formatMoney(amountNum)}.`);
+    if (allocTotal > availableToAllocate + 0.005)
+      return setError(
+        `You've allocated ${formatMoney(allocTotal)} but only ${formatMoney(availableToAllocate)} is available (received + deductions).`
+      );
 
     setSaving(true);
 
@@ -221,10 +252,24 @@ export default function ReceiptEntryPage() {
       }
     }
 
-    // 3. flip each touched invoice's status (paid when fully settled, else partial)
+    // 2b. deductions + service notes — no backend columns for either, so they're
+    // saved locally against this receipt's new id (see lib/receiptExtras.ts).
+    const allocatedInvoiceIds = new Set(rows.map((r) => r.invoice_id));
+    const relevantServiceNotes = Object.fromEntries(
+      Object.entries(serviceNotes).filter(([invId, note]) => allocatedInvoiceIds.has(invId) && note.trim() !== "")
+    );
+    if (deductions.length > 0 || Object.keys(relevantServiceNotes).length > 0) {
+      setReceiptExtras(rcpt.id, { deductions, serviceNotes: relevantServiceNotes });
+    }
+
+    // 3. flip each touched invoice's status (paid when fully settled, else partial).
+    // A deduction counts toward settling an invoice in proportion to how much of
+    // this receipt's allocation went to it — it explains a shortfall, it doesn't
+    // vanish it, but it does let the invoice close out as paid.
     for (const row of rows) {
       const inv = openInvoices.find((i) => i.id === row.invoice_id)!;
-      const left = inv.outstanding - row.amount;
+      const deductionShare = allocTotal > 0 ? (deductionsTotal * row.amount) / allocTotal : 0;
+      const left = inv.outstanding - row.amount - deductionShare;
       const status = left <= 0.005 ? "paid" : "partial";
       const { error: uErr } = await supabase.from("invoices").update({ status }).eq("id", inv.id);
       if (uErr) {
@@ -237,7 +282,9 @@ export default function ReceiptEntryPage() {
     setOpen(false);
     setSuccess(
       `Receipt ${receiptNo.trim()} saved — ${formatMoney(amountNum)} received` +
-        (rows.length ? `, allocated across ${rows.length} invoice${rows.length > 1 ? "s" : ""}.` : "."),
+        (rows.length ? `, allocated across ${rows.length} invoice${rows.length > 1 ? "s" : ""}` : "") +
+        (deductionsTotal > 0 ? `, plus ${formatMoney(deductionsTotal)} in deductions` : "") +
+        ".",
     );
     loadAll();
   }
@@ -344,6 +391,20 @@ export default function ReceiptEntryPage() {
             <FormField label="Reference (cheque no / UTR…)">
               <input className={inputClass} value={reference} onChange={(e) => setReference(e.target.value)} />
             </FormField>
+            <FormField label="Deductions (TDS, bank charges…)">
+              <button
+                type="button"
+                onClick={() => setShowDeductions(true)}
+                className={`${inputClass} flex items-center justify-between text-left hover:bg-slate-50 dark:hover:bg-slate-700`}
+              >
+                <span>
+                  {deductions.length === 0
+                    ? "None"
+                    : `${deductions.length} item${deductions.length > 1 ? "s" : ""} · ${formatMoney(deductionsTotal)}`}
+                </span>
+                <Icon name="pencil" size={14} />
+              </button>
+            </FormField>
           </div>
 
           {/* Allocation table — the "knock-off" */}
@@ -355,7 +416,7 @@ export default function ReceiptEntryPage() {
                 </h4>
                 <button
                   onClick={autoAllocate}
-                  disabled={amountNum <= 0 || openInvoices.length === 0}
+                  disabled={availableToAllocate <= 0 || openInvoices.length === 0}
                   className="rounded-lg border border-brand px-3 py-1.5 text-xs font-semibold text-brand hover:bg-brand hover:text-white disabled:opacity-40"
                 >
                   Auto-allocate (oldest first)
@@ -451,12 +512,15 @@ export default function ReceiptEntryPage() {
                         <th className="w-40 px-4 py-2.5 text-right font-semibold text-slate-600 dark:text-slate-300">
                           Allocate (₹)
                         </th>
+                        <th className="w-56 px-4 py-2.5 text-left font-semibold text-slate-600 dark:text-slate-300">
+                          Services covered
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {visibleInvoices.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-8 text-center text-slate-400 dark:text-slate-500">
+                          <td colSpan={7} className="px-4 py-8 text-center text-slate-400 dark:text-slate-500">
                             No invoices match these filters.
                           </td>
                         </tr>
@@ -488,6 +552,14 @@ export default function ReceiptEntryPage() {
                                 placeholder="0.00"
                               />
                             </td>
+                            <td className="px-4 py-2.5">
+                              <input
+                                className={`${inputClass} w-full`}
+                                value={serviceNotes[inv.id] ?? servicesByInvoice.get(inv.id) ?? ""}
+                                onChange={(e) => setServiceNotes({ ...serviceNotes, [inv.id]: e.target.value })}
+                                placeholder="Which service(s) is this payment for?"
+                              />
+                            </td>
                           </tr>
                         ))
                       )}
@@ -496,7 +568,7 @@ export default function ReceiptEntryPage() {
                 </div>
               )}
 
-              {amountNum > 0 && (
+              {availableToAllocate > 0 && (
                 <p
                   className={`mt-3 text-sm font-medium ${
                     unallocated < -0.005
@@ -504,7 +576,9 @@ export default function ReceiptEntryPage() {
                       : "text-slate-600 dark:text-slate-400"
                   }`}
                 >
-                  Received {formatMoney(amountNum)} · Allocated {formatMoney(allocTotal)} ·{" "}
+                  Received {formatMoney(amountNum)}
+                  {deductionsTotal > 0 ? ` + ${formatMoney(deductionsTotal)} deductions` : ""} · Allocated{" "}
+                  {formatMoney(allocTotal)} ·{" "}
                   {unallocated < -0.005
                     ? `Over-allocated by ${formatMoney(-unallocated)} — reduce an allocation.`
                     : `Unallocated ${formatMoney(unallocated)}`}
@@ -531,6 +605,14 @@ export default function ReceiptEntryPage() {
         </div>
       )}
 
+      <DeductionDialog
+        open={showDeductions}
+        glAccounts={glAccounts}
+        deductions={deductions}
+        onChange={setDeductions}
+        onClose={() => setShowDeductions(false)}
+      />
+
       {loading ? (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-400 dark:border-slate-800 dark:bg-slate-900">
           Loading receipts…
@@ -539,5 +621,118 @@ export default function ReceiptEntryPage() {
         <DataTable columns={columns} rows={receipts} empty="No receipts yet — record the first one." />
       )}
     </div>
+  );
+}
+
+/*
+  Deduction pop-up — a table of GL account + amount rows explaining why a
+  receipt came in short of the invoice (TDS, bank charges, rounding…). There is
+  no deductions column in the backend, so the caller saves the result locally
+  against the receipt's id (lib/receiptExtras.ts) rather than to Supabase.
+*/
+function DeductionDialog({
+  open,
+  glAccounts,
+  deductions,
+  onChange,
+  onClose,
+}: {
+  open: boolean;
+  glAccounts: GLAccount[];
+  deductions: Deduction[];
+  onChange: (next: Deduction[]) => void;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+
+  function addRow() {
+    onChange([...deductions, { id: crypto.randomUUID(), glAccountId: "", glAccountName: "", amount: 0 }]);
+  }
+  function updateRow(id: string, patch: Partial<Deduction>) {
+    onChange(deductions.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  }
+  function removeRow(id: string) {
+    onChange(deductions.filter((d) => d.id !== id));
+  }
+
+  const total = deductionTotal(deductions);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-drawer dark:bg-slate-900">
+        <div className="p-6">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">Deductions</h3>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Record what explains a shortfall — e.g. TDS deducted by the customer, or bank charges — against a GL
+            account, so it's accounted for without pretending the cash arrived.
+          </p>
+
+          <div className="mt-4 space-y-2">
+            {deductions.length === 0 && (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-400 dark:border-slate-800 dark:bg-slate-800/50">
+                No deductions added yet.
+              </p>
+            )}
+            {deductions.map((d) => (
+              <div key={d.id} className="flex items-center gap-2">
+                <select
+                  className={`${inputClass} flex-1`}
+                  value={d.glAccountId}
+                  onChange={(e) => {
+                    const acc = glAccounts.find((a) => a.id === e.target.value);
+                    updateRow(d.id, { glAccountId: e.target.value, glAccountName: acc?.name ?? "" });
+                  }}
+                >
+                  <option value="">— GL account —</option>
+                  {glAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.code} · {a.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  className={`${inputClass} w-28 text-right`}
+                  value={d.amount || ""}
+                  onChange={(e) => updateRow(d.id, { amount: Number(e.target.value) || 0 })}
+                  placeholder="0.00"
+                />
+                <button
+                  onClick={() => removeRow(d.id)}
+                  className="text-slate-400 hover:text-red-600"
+                  title="Remove"
+                >
+                  <Icon name="trash" size={15} />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button
+            onClick={addRow}
+            className="mt-3 text-sm font-medium text-brand hover:underline"
+          >
+            + Add deduction
+          </button>
+
+          <div className="mt-4 flex items-center justify-between border-t border-slate-200 pt-3 text-sm font-semibold text-slate-700 dark:border-slate-800 dark:text-slate-200">
+            <span>Total deductions</span>
+            <span className="tabular-nums">{formatMoney(total)}</span>
+          </div>
+
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-dark"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

@@ -20,6 +20,7 @@
 */
 
 import type { GLAccount } from "./types";
+import type { GstSplit } from "./gst";
 
 export type AccountType = GLAccount["type"];
 
@@ -381,6 +382,76 @@ export function parseCSV(text: string): string[][] {
     rows.push(row);
   }
   return rows.filter((r) => r.some((c) => c.trim() !== ""));
+}
+
+// ---------------------------------------------------------------------------
+// Sales invoice GL impact (preview only — see module note below)
+// ---------------------------------------------------------------------------
+
+/*
+  Sales invoices post nowhere today: there is no journal/ledger table in the
+  backend, and the golden rule is never to alter it. So this is a PREVIEW —
+  it shows the double-entry lines an invoice would produce, computed live from
+  the invoice + the real chart of accounts, without writing anything new.
+*/
+
+export interface GlImpactLine {
+  side: "debit" | "credit";
+  code: string;
+  name: string;
+  amount: number;
+}
+
+/** Find a GL account by its conventional code, falling back to a name match. */
+function findAccount(accounts: GLAccount[], code: string, nameHint: string): GLAccount | null {
+  return (
+    accounts.find((a) => a.code === code) ??
+    accounts.find((a) => a.name.toLowerCase() === nameHint.toLowerCase()) ??
+    null
+  );
+}
+
+/**
+ * Debit/credit lines for one sales invoice:
+ *   Debit  Accounts Receivable         (total)
+ *   Credit Service Revenue             (subtotal)
+ *   Credit GST/VAT Payable             (GST — CGST+SGST or IGST, shown split)
+ * Falls back to a generic label (still shown) if a conventional account is
+ * missing from this team's chart of accounts.
+ */
+export function invoiceGlImpact(
+  accounts: GLAccount[],
+  totals: { subtotal: number; gst: GstSplit },
+): GlImpactLine[] {
+  const ar = findAccount(accounts, "1050", "Accounts Receivable");
+  const revenue = findAccount(accounts, "4010", "Service Revenue");
+  const gstPayable = findAccount(accounts, "2050", "GST/VAT Payable");
+
+  const lines: GlImpactLine[] = [
+    {
+      side: "debit",
+      code: ar?.code ?? "1050",
+      name: ar?.name ?? "Accounts Receivable",
+      amount: totals.subtotal + totals.gst.cgst + totals.gst.sgst + totals.gst.igst,
+    },
+    {
+      side: "credit",
+      code: revenue?.code ?? "4010",
+      name: revenue?.name ?? "Service Revenue",
+      amount: totals.subtotal,
+    },
+  ];
+
+  if (totals.gst.intraState) {
+    if (totals.gst.cgst > 0)
+      lines.push({ side: "credit", code: gstPayable?.code ?? "2050", name: `${gstPayable?.name ?? "GST/VAT Payable"} (CGST)`, amount: totals.gst.cgst });
+    if (totals.gst.sgst > 0)
+      lines.push({ side: "credit", code: gstPayable?.code ?? "2050", name: `${gstPayable?.name ?? "GST/VAT Payable"} (SGST)`, amount: totals.gst.sgst });
+  } else if (totals.gst.igst > 0) {
+    lines.push({ side: "credit", code: gstPayable?.code ?? "2050", name: `${gstPayable?.name ?? "GST/VAT Payable"} (IGST)`, amount: totals.gst.igst });
+  }
+
+  return lines;
 }
 
 export interface ParsedImportRow {
