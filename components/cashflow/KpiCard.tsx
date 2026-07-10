@@ -27,6 +27,7 @@ export function KpiCard({
   trend,
   trendGood = "up",
   onClick,
+  format = "currency",
 }: {
   label: string;
   amount: number;
@@ -41,9 +42,13 @@ export function KpiCard({
   trendGood?: "up" | "down";
   /** When provided, the whole card is a button that drills into a view. */
   onClick?: () => void;
+  /** "count" renders `amount` as a plain integer (e.g. a transaction count) —
+   *  no currency symbol, no decimals. Every other KPI stays money-formatted. */
+  format?: "currency" | "count";
 }) {
   const resolved = signed ? (amount < 0 ? "out" : "in") : tone;
   const t = TONE[resolved];
+  const display = format === "count" ? Math.round(amount).toLocaleString() : formatMoney(amount, currency);
 
   const trendChip =
     trend != null && Number.isFinite(trend) ? (
@@ -67,8 +72,8 @@ export function KpiCard({
       <div className="flex items-start justify-between">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</p>
-          <p className={`mt-2 truncate text-2xl font-bold tabular-nums ${t.value}`} title={formatMoney(amount, currency)}>
-            {formatMoney(amount, currency)}
+          <p className={`mt-2 truncate text-2xl font-bold tabular-nums ${t.value}`} title={display}>
+            {display}
           </p>
           <div className="mt-1 flex items-center gap-2">
             {trendChip}

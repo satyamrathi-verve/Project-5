@@ -285,7 +285,7 @@ export default function CashFlowPage() {
                   icon={view === "inflows" ? "download" : "upload"}
                   tone={view === "inflows" ? "in" : "out"}
                 />
-                <KpiCard label="Transactions" amount={tableRows.length} currency={currency} icon="receipt" tone="neutral" hint="In this period" />
+                <KpiCard label="Transactions" amount={tableRows.length} currency={currency} format="count" icon="receipt" tone="neutral" hint="In this period" />
                 <KpiCard label="Net Cash Flow" amount={kpis.net} currency={currency} icon="trend" signed />
               </div>
               <CashFlowTable
