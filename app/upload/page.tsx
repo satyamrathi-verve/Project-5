@@ -38,14 +38,14 @@ interface Field {
 */
 const FIELDS: Record<ImportType, Field[]> = {
   customers: [
-    { key: "code", label: "Code", required: true, width: "w-28" },
+    { key: "code", label: "Code", width: "w-28" },
     { key: "name", label: "Name", required: true },
     { key: "gstin", label: "GSTIN", width: "w-40" },
     { key: "pan", label: "PAN", width: "w-32" },
     { key: "contact_person", label: "Contact" },
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone", width: "w-36" },
-    { key: "credit_days", label: "Credit Days", numeric: true, width: "w-28" },
+    { key: "credit_days", label: "Credit Days", required: true, numeric: true, width: "w-28" },
     { key: "credit_limit", label: "Credit Limit", numeric: true, width: "w-32" },
     { key: "opening_balance", label: "Opening Bal.", numeric: true, width: "w-32" },
   ],
@@ -64,8 +64,8 @@ const FIELDS: Record<ImportType, Field[]> = {
 const SAMPLE: Record<ImportType, string[][]> = {
   customers: [
     ["CUST900", "Aurora Textiles Pvt Ltd", "27AABCS1111A1Z1", "AABCS1111A", "Ritu Shah", "ritu@aurora.example", "9820011223", "30", "500000", "0"],
-    ["CUST901", "Bluewave Logistics", "", "", "Imran Khan", "imran@bluewave.example", "9820044556", "45", "250000", "0"],
-    ["", "Missing Code Ltd", "BADGSTIN", "", "Nobody", "not-an-email", "", "abc", "100000", "0"],
+    ["", "Bluewave Logistics (code auto-assigned)", "", "", "Imran Khan", "imran@bluewave.example", "9820044556", "45", "250000", "0"],
+    ["", "", "BADGSTIN", "", "Nobody", "not-an-email", "", "", "100000", "0"],
   ],
   invoices: [
     ["INV-9001", "2026-06-01", "CUST001", "", "Advisory retainer — June", "50000", "9000", ""],
@@ -77,6 +77,16 @@ const SAMPLE: Record<ImportType, string[][]> = {
 interface Row {
   id: string;
   cells: Record<string, string>;
+}
+
+/** Highest number used by any existing customer code, plus one. */
+function nextCodeNumber(codes: string[]): number {
+  let max = 0;
+  for (const c of codes) {
+    const m = c.trim().match(/^[A-Za-z-]*(\d+)$/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return max + 1;
 }
 
 function addDays(iso: string, days: number): string {
@@ -271,8 +281,11 @@ export default function UploadReportPage() {
     const cell = (r: Row, k: string) => (r.cells[k] ?? "").trim();
 
     if (type === "customers") {
+      // A blank Code is auto-assigned the next free number, matching the Customer
+      // Master form. Numbers advance across the batch so rows don't collide.
+      let seq = nextCodeNumber(customers.map((c) => c.code));
       const payload = validRows.map((r) => ({
-        code: cell(r, "code"),
+        code: cell(r, "code") || `CUST${String(seq++).padStart(3, "0")}`,
         name: cell(r, "name"),
         gstin: cell(r, "gstin").toUpperCase() || null,
         pan: cell(r, "pan").toUpperCase() || null,
@@ -420,6 +433,7 @@ export default function UploadReportPage() {
         </div>
         <p className="mt-3 text-xs text-slate-400">
           Expected columns: {fields.map((f) => f.key + (f.required ? "*" : "")).join(", ")} — * required.
+          {type === "customers" && " Leave code blank and the next free number is assigned for you."}
           {type === "invoices" && " Due date, total and status are worked out for you from the customer's credit days."}
         </p>
       </div>

@@ -56,7 +56,7 @@ const BLANK = {
   secondary_phone: "",
   secondary_email: "",
   status: "active" as CustomerStatus,
-  credit_days: "30",
+  credit_days: "", // no default — payment terms is a required choice
   credit_limit: "0",
   opening_balance: "0",
 };
@@ -64,7 +64,35 @@ const BLANK = {
 type FormValues = typeof BLANK;
 type FieldErrors = Partial<Record<keyof FormValues, string>>;
 
+/*
+  Customer codes are auto-assigned: take the highest number already used and add
+  one, keeping the existing prefix and zero-padding (CUST011 → CUST012). Falls
+  back to CUST001 for an empty table. The code column is unique in the database,
+  so a simultaneous save by two people is caught there and retried once.
+*/
+const CODE_RE = /^([A-Za-z-]*)(\d+)$/;
+
+function nextCustomerCode(existing: Pick<Customer, "code">[]): string {
+  let prefix = "CUST";
+  let width = 3;
+  let max = 0;
+
+  for (const { code } of existing) {
+    const m = code.trim().match(CODE_RE);
+    if (!m) continue;
+    const n = parseInt(m[2], 10);
+    if (n > max) {
+      max = n;
+      prefix = m[1] || prefix;
+      width = m[2].length;
+    }
+  }
+  return `${prefix}${String(max + 1).padStart(width, "0")}`;
+}
+
 function termsForDays(days: string): string {
+  // Guard the empty case: Number("") is 0, which would wrongly match "Due on Receipt".
+  if (!days.trim()) return "";
   const match = PAYMENT_TERMS.find((t) => t.days === Number(days));
   return match ? match.label : "Custom";
 }
@@ -85,8 +113,14 @@ function splitAddress(address: string | null): Pick<FormValues, (typeof ADDRESS_
 function validate(v: FormValues): FieldErrors {
   const errors: FieldErrors = {};
 
-  if (!v.code.trim()) errors.code = "Customer Code is required.";
+  /*
+    Only two fields are mandatory: the customer's name and their payment terms.
+    The code is system-assigned on create, so it can only be blanked while
+    editing an existing customer — still worth catching.
+  */
   if (!v.name.trim()) errors.name = "Legal Customer Name is required.";
+  if (!v.credit_days.trim()) errors.credit_days = "Payment terms are required.";
+  if (!v.code.trim()) errors.code = "Customer Code cannot be blank.";
 
   const gstin = v.gstin.trim().toUpperCase();
   if (gstin) {
@@ -145,8 +179,6 @@ export default function CustomerMasterPage() {
   const [hasMetaColumns, setHasMetaColumns] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | CustomerStatus>("all");
   const [selected, setSelected] = useState<string[]>([]);
 
   /* null = form closed; "new" = adding; a Customer = editing that row. */
@@ -197,7 +229,7 @@ export default function CustomerMasterPage() {
   }, []);
 
   function openAdd() {
-    setValues(BLANK);
+    setValues({ ...BLANK, code: nextCustomerCode(customers) });
     setFieldErrors({});
     setFormError(null);
     setEditing("new");
@@ -274,14 +306,29 @@ export default function CustomerMasterPage() {
       row.status = values.status;
     }
 
-    const { data, error } =
+    let { data, error } =
       editing === "new"
         ? await supabase.from("customers").insert(row).select().single()
         : await supabase.from("customers").update(row).eq("id", editing.id).select().single();
 
+    // Someone else claimed this auto-assigned code between opening the form and
+    // saving it (Postgres 23505 = unique violation). Re-read, take the next free
+    // number and try once more.
+    if (error && editing === "new" && error.code === "23505") {
+      const fresh = await supabase.from("customers").select("code");
+      if (!fresh.error) {
+        row.code = nextCustomerCode(fresh.data ?? []);
+        ({ data, error } = await supabase.from("customers").insert(row).select().single());
+      }
+    }
+
     setSaving(false);
     if (error) {
-      setFormError(error.message);
+      setFormError(
+        error.code === "23505"
+          ? `Customer code ${row.code} is already taken. Close the form and try again.`
+          : error.message,
+      );
       return;
     }
 
@@ -324,25 +371,20 @@ export default function CustomerMasterPage() {
 
   if (!isConfigured) return <NotConfigured />;
 
-  const q = search.trim().toLowerCase();
-  const visible = customers.filter((c) => {
-    if (statusFilter !== "all" && metaFor(c).status !== statusFilter) return false;
-    if (!q) return true;
-    const meta = metaFor(c);
-    return (
-      c.code.toLowerCase().includes(q) ||
-      c.name.toLowerCase().includes(q) ||
-      (c.contact_person ?? "").toLowerCase().includes(q) ||
-      (c.email ?? "").toLowerCase().includes(q) ||
-      (c.phone ?? "").toLowerCase().includes(q) ||
-      meta.secondaryEmail.toLowerCase().includes(q) ||
-      meta.secondaryPhone.toLowerCase().includes(q)
-    );
-  });
-
   const columns: Column<Customer>[] = [
     { key: "code", header: "Code", className: "font-medium" },
     { key: "name", header: "Name" },
+    {
+      key: "gstin",
+      header: "GSTIN",
+      value: (c) => c.gstin ?? "",
+      render: (c) =>
+        c.gstin ? (
+          <span className="font-mono text-xs tracking-tight">{c.gstin}</span>
+        ) : (
+          <span className="text-slate-300 dark:text-slate-600">—</span>
+        ),
+    },
     {
       key: "contact",
       header: "Contact",
@@ -433,25 +475,10 @@ export default function CustomerMasterPage() {
         }
       />
 
+      {/* Searching and filtering live on the column headers themselves (sort
+          arrows + funnel icons), so no separate toolbar controls are needed. */}
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by code, name, contact, email or phone…"
-          className={`${inputClass} w-full max-w-sm`}
-        />
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as "all" | CustomerStatus)}
-          className={inputClass}
-        >
-          <option value="all">All statuses</option>
-          <option value="active">Active only</option>
-          <option value="inactive">Inactive only</option>
-        </select>
-        <span className="text-sm text-slate-400">
-          {visible.length} of {customers.length}
-        </span>
+        <span className="text-sm text-slate-400">{customers.length} customers</span>
       </div>
 
       {selected.length > 0 && (
@@ -494,15 +521,11 @@ export default function CustomerMasterPage() {
       ) : (
         <DataTable
           columns={columns}
-          rows={visible}
+          rows={customers}
           selectable
           selectedIds={selected}
           onSelectionChange={setSelected}
-          empty={
-            q || statusFilter !== "all"
-              ? "No customers match your filters."
-              : "No customers yet — add the first one."
-          }
+          empty="No customers yet — add the first one."
         />
       )}
 
@@ -518,13 +541,19 @@ export default function CustomerMasterPage() {
             </h3>
 
             <Section title="Basic Details">
-              <FormField label="Customer Code *" error={fieldErrors.code}>
+              <FormField label="Customer Code" error={fieldErrors.code}>
                 <input
-                  className={fieldErrors.code ? inputErrorClass : inputClass}
+                  className={`${fieldErrors.code ? inputErrorClass : inputClass} ${
+                    editing === "new" ? "cursor-not-allowed bg-slate-50 dark:bg-slate-800/60" : ""
+                  }`}
                   value={values.code}
                   onChange={set("code")}
-                  placeholder="CUST-001"
+                  readOnly={editing === "new"}
+                  placeholder="CUST001"
                 />
+                {editing === "new" && !fieldErrors.code && (
+                  <span className="text-xs text-slate-400">Assigned automatically — next free number.</span>
+                )}
               </FormField>
               <FormField label="Legal Customer Name *" error={fieldErrors.name}>
                 <input
@@ -621,8 +650,15 @@ export default function CustomerMasterPage() {
             </Section>
 
             <Section title="Credit & Payment Terms">
-              <FormField label="Payment Terms">
-                <select className={inputClass} value={termsForDays(values.credit_days)} onChange={setTerms}>
+              <FormField label="Payment Terms *" error={fieldErrors.credit_days}>
+                <select
+                  className={fieldErrors.credit_days ? inputErrorClass : inputClass}
+                  value={termsForDays(values.credit_days)}
+                  onChange={setTerms}
+                >
+                  <option value="" disabled>
+                    Select payment terms…
+                  </option>
                   {PAYMENT_TERMS.map((t) => (
                     <option key={t.label} value={t.label}>
                       {t.label}
@@ -632,7 +668,14 @@ export default function CustomerMasterPage() {
                 </select>
               </FormField>
               <FormField label="Credit Days">
-                <input className={inputClass} type="number" min="0" value={values.credit_days} onChange={set("credit_days")} />
+                <input
+                  className={inputClass}
+                  type="number"
+                  min="0"
+                  value={values.credit_days}
+                  onChange={set("credit_days")}
+                  placeholder="e.g. 30"
+                />
               </FormField>
               <FormField label="Credit Limit (₹)">
                 <input className={inputClass} type="number" min="0" value={values.credit_limit} onChange={set("credit_limit")} />
