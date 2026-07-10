@@ -62,5 +62,7 @@ export function toCsv(headers: readonly string[], rows: readonly (readonly strin
  * "customer_code" and "CUSTOMERCODE" all line up.
  */
 export function normaliseHeader(h: string): string {
-  return h.trim().toLowerCase().replace(/[\s_-]+/g, "");
+  // Drop the trailing "*" the downloadable template uses to mark required columns,
+  // so a file saved straight from that template still matches.
+  return h.trim().toLowerCase().replace(/\*/g, "").replace(/[\s_-]+/g, "");
 }

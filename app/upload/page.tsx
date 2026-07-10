@@ -107,6 +107,8 @@ export default function UploadReportPage() {
   const [existingInvoiceNos, setExistingInvoiceNos] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
+  /** Set once the user presses Validate, so the result banner appears. */
+  const [validated, setValidated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -202,6 +204,7 @@ export default function UploadReportPage() {
     setFileName("");
     setResult(null);
     setError(null);
+    setValidated(false);
     if (fileRef.current) fileRef.current.value = "";
   }
 
@@ -245,6 +248,7 @@ export default function UploadReportPage() {
     setFileName(name);
     setError(null);
     setResult(null);
+    setValidated(false);
   }
 
   async function onFile(file: File) {
@@ -260,8 +264,9 @@ export default function UploadReportPage() {
     ingest(toCsv(fields.map((f) => f.key), SAMPLE[type]), "sample.csv");
   }
 
+  /** Blank template: every column the screen accepts, required ones marked with *. */
   function downloadTemplate() {
-    const csv = toCsv(fields.map((f) => f.key), []);
+    const csv = toCsv(fields.map((f) => (f.required ? `${f.key}*` : f.key)), []);
     downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${type}-template.csv`);
   }
 
@@ -465,19 +470,50 @@ export default function UploadReportPage() {
                 Clear
               </button>
               <button
-                onClick={runImport}
-                disabled={importing || validRows.length === 0}
-                className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                onClick={() => setValidated(true)}
+                className="rounded-lg border border-brand px-4 py-2 text-sm font-semibold text-brand hover:bg-brand hover:text-white"
               >
-                {importing ? "Importing…" : `Import ${validRows.length} row${validRows.length === 1 ? "" : "s"}`}
+                Validate
+              </button>
+              <button
+                onClick={runImport}
+                disabled={importing || badCount > 0 || validRows.length === 0}
+                title={badCount > 0 ? "Fix every red cell before importing." : undefined}
+                className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {importing ? "Importing…" : `Import ${rows.length} row${rows.length === 1 ? "" : "s"}`}
               </button>
             </div>
           </div>
 
-          {badCount > 0 && (
-            <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-              Rows with a red cell won&apos;t be imported. Type over the cell to fix it, or delete the row.
-            </p>
+          {badCount > 0 ? (
+            <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
+              <p className="font-semibold">
+                {badCount} row{badCount > 1 ? "s" : ""} can&apos;t be imported — nothing will be saved until every one
+                is fixed.
+              </p>
+              <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs">
+                {rows.flatMap((row, i) => {
+                  const errs = errorsByRow.get(row.id);
+                  if (!errs) return [];
+                  return [
+                    <li key={row.id}>
+                      Row {i + 1}:{" "}
+                      {Object.entries(errs)
+                        .map(([k, msg]) => `${fields.find((f) => f.key === k)?.label ?? k} — ${msg}`)
+                        .join("; ")}
+                    </li>,
+                  ];
+                })}
+              </ul>
+              <p className="mt-2 text-xs">Type over a red cell to fix it, or remove the row.</p>
+            </div>
+          ) : (
+            validated && (
+              <p className="mb-3 rounded-lg border border-green-300 bg-green-50 px-4 py-2.5 text-sm font-medium text-green-800 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300">
+                All {rows.length} row{rows.length > 1 ? "s" : ""} passed validation — ready to import.
+              </p>
+            )
           )}
 
           <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
