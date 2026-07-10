@@ -243,8 +243,24 @@ export default function InvoiceViewPage() {
   useEffect(() => {
     if (!invoice) return;
     const previous = document.title;
-    document.title = `Invoice ${invoice.invoice_no}`;
+    const own = `Invoice ${invoice.invoice_no}`;
+    document.title = own;
+
+    // Chrome/Edge print the document title in the page header. Blank it while the
+    // print dialog is open so the paper shows only our own TAX INVOICE heading,
+    // then restore it once printing is done.
+    const onBeforePrint = () => {
+      document.title = "";
+    };
+    const onAfterPrint = () => {
+      document.title = own;
+    };
+    window.addEventListener("beforeprint", onBeforePrint);
+    window.addEventListener("afterprint", onAfterPrint);
+
     return () => {
+      window.removeEventListener("beforeprint", onBeforePrint);
+      window.removeEventListener("afterprint", onAfterPrint);
       document.title = previous;
     };
   }, [invoice]);
@@ -467,7 +483,7 @@ export default function InvoiceViewPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-4xl print:max-w-none">
       {/* "Message copied" toast — WhatsApp can't auto-fill text alongside a file. */}
       {waCopied && (
         <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-4 py-3 text-sm text-white shadow-lg print:hidden dark:bg-slate-700">
@@ -597,31 +613,42 @@ export default function InvoiceViewPage() {
       {/* ============ THE TAX INVOICE DOCUMENT ============ */}
       <div
         id="invoice-doc"
-        className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 print:rounded-none print:border-0 print:shadow-none"
+        className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900 print:rounded-none print:border-0 print:p-[10mm] print:shadow-none"
       >
-        {/* Letterhead */}
-        <div className="flex flex-col gap-6 border-b-4 border-[#2b4c9c] px-6 py-6 sm:flex-row sm:items-start sm:justify-between sm:px-8">
-          <div>
-            <VerveLogo className="text-[24px]" />
-            <div className="mt-3 space-y-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
-              {company?.address && <p className="whitespace-pre-line">{company.address}</p>}
-              {company?.gstin && <p>GSTIN: {company.gstin}</p>}
-              {(company?.email || company?.phone) && (
-                <p>{[company?.email, company?.phone].filter(Boolean).join("  ·  ")}</p>
-              )}
+        {/* Letterhead — title centred on top, company left, invoice details right */}
+        <div className="border-b-4 border-[#2b4c9c] px-6 py-6 sm:px-8 print:px-0 print:py-2">
+          <h1 className="text-center text-2xl font-bold uppercase tracking-[0.2em] text-slate-900 dark:text-white print:text-lg">
+            Tax Invoice
+          </h1>
+
+          <div className="mt-6 flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between print:mt-2 print:flex-row print:gap-2">
+            {/* Left: logo + company details */}
+            <div>
+              <VerveLogo className="text-[24px]" />
+              <div className="mt-3 space-y-0.5 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                {company?.address && <p className="whitespace-pre-line">{company.address}</p>}
+                {company?.gstin && <p>GSTIN: {company.gstin}</p>}
+                {(company?.email || company?.phone) && (
+                  <p>{[company?.email, company?.phone].filter(Boolean).join("  ·  ")}</p>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="sm:text-right">
-            <p className="text-2xl font-bold uppercase tracking-wide text-slate-900 dark:text-white">Tax Invoice</p>
-            <p className="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-200">{invoice.invoice_no}</p>
-            <div className="mt-2 sm:flex sm:justify-end">
-              <StatusBadge status={invoice.status} />
+
+            {/* Right: labelled invoice details + status */}
+            <div className="sm:text-right">
+              <p className="text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Invoice No: </span>
+                <span className="font-semibold text-slate-900 dark:text-white">{invoice.invoice_no}</span>
+              </p>
+              <div className="mt-2 sm:flex sm:justify-end">
+                <StatusBadge status={invoice.status} />
+              </div>
             </div>
           </div>
         </div>
 
         {/* Bill To + invoice meta */}
-        <div className="grid grid-cols-1 gap-6 px-6 py-6 sm:grid-cols-2 sm:px-8">
+        <div className="grid grid-cols-1 gap-6 px-6 py-6 sm:grid-cols-2 sm:px-8 print:grid-cols-2 print:gap-3 print:px-0 print:py-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[#2b4c9c]">Bill To</p>
             <p className="mt-1.5 text-base font-semibold text-slate-900 dark:text-white">{customer?.name ?? "—"}</p>
@@ -669,17 +696,17 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Line items */}
-        <div className="px-6 sm:px-8">
+        <div className="px-6 sm:px-8 print:px-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-[#2b4c9c] text-left text-white">
-                  <th className="rounded-l-lg px-3 py-2.5 font-semibold w-10 text-center">#</th>
-                  <th className="px-3 py-2.5 font-semibold">Description of Services</th>
-                  <th className="px-3 py-2.5 text-center font-semibold w-24">SAC</th>
-                  <th className="px-3 py-2.5 text-right font-semibold w-16">Qty</th>
-                  <th className="px-3 py-2.5 text-right font-semibold w-32">Rate</th>
-                  <th className="rounded-r-lg px-3 py-2.5 text-right font-semibold w-36">Amount</th>
+                  <th className="rounded-l-lg px-3 py-2.5 font-semibold w-10 text-center print:py-1">#</th>
+                  <th className="px-3 py-2.5 font-semibold print:py-1">Description of Services</th>
+                  <th className="px-3 py-2.5 text-center font-semibold w-24 print:py-1">SAC</th>
+                  <th className="px-3 py-2.5 text-right font-semibold w-16 print:py-1">Qty</th>
+                  <th className="px-3 py-2.5 text-right font-semibold w-32 print:py-1">Rate</th>
+                  <th className="rounded-r-lg px-3 py-2.5 text-right font-semibold w-36 print:py-1">Amount</th>
                 </tr>
               </thead>
               <tbody>
@@ -691,7 +718,7 @@ export default function InvoiceViewPage() {
                   </tr>
                 ) : (
                   items.map((it, i) => (
-                    <tr key={it.id} className="border-b border-slate-100 align-top dark:border-slate-800">
+                    <tr key={it.id} className="border-b border-slate-100 align-top dark:border-slate-800 print:text-xs">
                       <td className="px-3 py-3 text-center font-medium tabular-nums text-slate-400">{i + 1}</td>
                       <td className="px-3 py-3">
                         <p className="font-medium text-slate-900 dark:text-white">{it.description}</p>
@@ -714,8 +741,8 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Totals */}
-        <div className="flex justify-end px-6 pt-5 sm:px-8">
-          <dl className="w-full max-w-xs space-y-2 text-sm">
+        <div className="flex justify-end px-6 pt-5 sm:px-8 print:px-0 print:pt-2">
+          <dl className="w-full max-w-xs space-y-2 text-sm print:space-y-0.5 print:text-xs">
             <div className="flex justify-between">
               <dt className="text-slate-500 dark:text-slate-400">Subtotal</dt>
               <dd className="tabular-nums text-slate-800 dark:text-slate-200">{formatMoney(num(invoice.subtotal))}</dd>
@@ -771,7 +798,7 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Amount in words */}
-        <div className="mt-5 border-t border-slate-100 px-6 py-4 dark:border-slate-800 sm:px-8">
+        <div className="mt-5 border-t border-slate-100 px-6 py-4 dark:border-slate-800 sm:px-8 print:mt-2 print:px-0 print:py-1.5">
           <p className="text-xs text-slate-500 dark:text-slate-400">
             <span className="font-semibold text-slate-600 dark:text-slate-300">Amount in words: </span>
             {amountInWords(total)}
@@ -779,7 +806,7 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Collection progress */}
-        <div className="px-6 pb-2 sm:px-8">
+        <div className="px-6 pb-2 sm:px-8 print:px-0">
           <div className="mb-1 flex items-center justify-between text-xs">
             <span className="font-medium text-slate-500 dark:text-slate-400">
               {settled ? "Payment complete" : `${collectedPct}% collected`}
@@ -797,7 +824,7 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Notes + terms */}
-        <div className="mt-4 grid grid-cols-1 gap-6 border-t border-slate-100 px-6 py-5 dark:border-slate-800 sm:grid-cols-2 sm:px-8">
+        <div className="mt-4 grid grid-cols-1 gap-6 border-t border-slate-100 px-6 py-5 dark:border-slate-800 sm:grid-cols-2 sm:px-8 print:mt-2 print:grid-cols-2 print:gap-3 print:px-0 print:py-2 print:text-xs">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Notes</p>
             {invoice.notes?.trim() && (
@@ -819,7 +846,7 @@ export default function InvoiceViewPage() {
         </div>
 
         {/* Document footer */}
-        <div className="border-t border-slate-100 px-6 py-3 text-center dark:border-slate-800 sm:px-8">
+        <div className="border-t border-slate-100 px-6 py-3 text-center dark:border-slate-800 sm:px-8 print:px-0 print:py-1">
           <p className="text-xs text-slate-400">
             For {company?.name ?? "Verve Advisory"} · This is a computer-generated invoice.
           </p>
