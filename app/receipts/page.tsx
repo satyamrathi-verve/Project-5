@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
@@ -11,7 +12,7 @@ import { NotConfigured } from "@/components/NotConfigured";
 import { formatMoney } from "@/lib/balances";
 import { Icon } from "@/components/icons";
 import { Popover } from "@/components/overlay";
-import { type Deduction, setReceiptExtras, deductionTotal } from "@/lib/receiptExtras";
+import { type Deduction, setReceiptExtras, getReceiptExtras, deductionTotal } from "@/lib/receiptExtras";
 
 /*
   Receipt Entry — record money received from a customer and "knock it off"
@@ -75,6 +76,11 @@ export default function ReceiptEntryPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  /** null while creating; the receipt's id while editing it. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  /** The receipt being viewed read-only, or null. */
+  const [viewing, setViewing] = useState<Receipt | null>(null);
+
   async function loadAll() {
     if (!supabase) return;
     setLoading(true);
@@ -119,18 +125,30 @@ export default function ReceiptEntryPage() {
     return m;
   }, [invoiceItems]);
 
-  /** invoice_id -> already-allocated total (from ALL receipts so far). */
+  /*
+    invoice_id -> already-allocated total. While EDITING a receipt we ignore that
+    receipt's own allocations, so the invoices it settled reappear with their
+    outstanding restored — otherwise a fully-paid invoice would vanish from the
+    list and its allocation could never be changed.
+  */
   const allocatedByInvoice = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of allocations) m.set(a.invoice_id, (m.get(a.invoice_id) ?? 0) + a.amount);
+    for (const a of allocations) {
+      if (editingId && a.receipt_id === editingId) continue;
+      m.set(a.invoice_id, (m.get(a.invoice_id) ?? 0) + a.amount);
+    }
     return m;
-  }, [allocations]);
+  }, [allocations, editingId]);
 
-  /** The chosen customer's invoices that still have money outstanding. */
+  /*
+    The chosen customer's invoices that still have money outstanding. Filtering on
+    the computed outstanding (rather than status !== 'paid') is what lets an
+    invoice this receipt paid off show up again while editing it.
+  */
   const openInvoices = useMemo(() => {
     if (!customerId) return [];
     return invoices
-      .filter((inv) => inv.customer_id === customerId && inv.status !== "paid")
+      .filter((inv) => inv.customer_id === customerId)
       .map((inv) => ({ ...inv, outstanding: inv.total - (allocatedByInvoice.get(inv.id) ?? 0) }))
       .filter((inv) => inv.outstanding > 0.005);
   }, [customerId, invoices, allocatedByInvoice]);
@@ -164,10 +182,36 @@ export default function ReceiptEntryPage() {
   if (!supabase) return <NotConfigured />;
 
   /*
+    Re-derive each invoice's status from the allocations that ACTUALLY remain in the
+    database. Called after anything that changes allocations (deleting or editing a
+    receipt), because otherwise an invoice keeps a stale "paid" with nothing paying
+    for it. Reads fresh rather than trusting local state, which is now out of date.
+  */
+  async function recomputeStatuses(invoiceIds: string[]) {
+    if (!supabase || invoiceIds.length === 0) return;
+    const { data: remaining } = await supabase
+      .from("receipt_allocations")
+      .select("invoice_id, amount")
+      .in("invoice_id", invoiceIds);
+
+    const paidByInvoice = new Map<string, number>();
+    for (const a of remaining ?? []) {
+      paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
+    }
+    const t = today();
+    for (const invoiceId of invoiceIds) {
+      const inv = invoices.find((i) => i.id === invoiceId);
+      if (!inv) continue;
+      const paid = paidByInvoice.get(invoiceId) ?? 0;
+      const status =
+        paid >= inv.total - 0.005 ? "paid" : paid > 0.005 ? "partial" : inv.due_date < t ? "overdue" : "open";
+      await supabase.from("invoices").update({ status }).eq("id", invoiceId);
+    }
+  }
+
+  /*
     Deleting a receipt cascades its receipt_allocations away (see seed.sql), which
-    silently un-pays the invoices it settled. So after the delete we recompute the
-    status of every invoice it touched from the allocations that remain — otherwise
-    an invoice would still read "paid" with nothing paying for it.
+    silently un-pays the invoices it settled — hence the recompute afterwards.
   */
   async function performDelete(ids: string[]) {
     if (!supabase || ids.length === 0) return;
@@ -184,26 +228,7 @@ export default function ReceiptEntryPage() {
       return;
     }
 
-    if (affected.length > 0) {
-      const { data: remaining } = await supabase
-        .from("receipt_allocations")
-        .select("invoice_id, amount")
-        .in("invoice_id", affected);
-
-      const paidByInvoice = new Map<string, number>();
-      for (const a of remaining ?? []) {
-        paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
-      }
-      const t = today();
-      for (const invoiceId of affected) {
-        const inv = invoices.find((i) => i.id === invoiceId);
-        if (!inv) continue;
-        const paid = paidByInvoice.get(invoiceId) ?? 0;
-        const status =
-          paid >= inv.total - 0.005 ? "paid" : paid > 0.005 ? "partial" : inv.due_date < t ? "overdue" : "open";
-        await supabase.from("invoices").update({ status }).eq("id", invoiceId);
-      }
-    }
+    await recomputeStatuses(affected);
 
     setDeleting(false);
     setConfirmDelete(null);
@@ -215,7 +240,33 @@ export default function ReceiptEntryPage() {
     loadAll();
   }
 
+  /** Reopen an existing receipt in the form, with its allocations restored. */
+  function openEdit(r: Receipt) {
+    const extras = getReceiptExtras(r.id);
+    setEditingId(r.id);
+    setReceiptNo(r.receipt_no);
+    setReceiptDate(r.receipt_date);
+    setCustomerId(r.customer_id);
+    setAmount(String(r.amount));
+    setMode(r.mode);
+    setReference(r.reference ?? "");
+    setAlloc(
+      Object.fromEntries(
+        allocations.filter((a) => a.receipt_id === r.id).map((a) => [a.invoice_id, String(a.amount)]),
+      ),
+    );
+    setServiceNotes(extras.serviceNotes);
+    setDeductions(extras.deductions);
+    setShowDeductions(false);
+    setFilters({ invoice_no: "", due_date: "", total: "", outstanding: "" });
+    setSort({ key: "due_date", dir: 1 });
+    setSuccess(null);
+    setError(null);
+    setOpen(true);
+  }
+
   function openForm() {
+    setEditingId(null);
     setReceiptNo(nextReceiptNo(receipts));
     setReceiptDate(today());
     setCustomerId("");
@@ -278,25 +329,38 @@ export default function ReceiptEntryPage() {
 
     setSaving(true);
 
+    const payload = {
+      receipt_no: receiptNo.trim(),
+      receipt_date: receiptDate,
+      customer_id: customerId,
+      amount: amountNum,
+      mode,
+      reference: reference.trim() || null,
+    };
+
+    // Invoices this receipt used to pay. If an allocation is removed while editing,
+    // that invoice still needs its status re-derived, so keep the old ids around.
+    const previouslyAllocated = editingId
+      ? allocations.filter((a) => a.receipt_id === editingId).map((a) => a.invoice_id)
+      : [];
+
     // 1. the receipt itself
-    const { data: rcpt, error: rErr } = await supabase
-      .from("receipts")
-      .insert({
-        receipt_no: receiptNo.trim(),
-        receipt_date: receiptDate,
-        customer_id: customerId,
-        amount: amountNum,
-        mode,
-        reference: reference.trim() || null,
-      })
-      .select()
-      .single();
+    const { data: rcpt, error: rErr } = editingId
+      ? await supabase.from("receipts").update(payload).eq("id", editingId).select().single()
+      : await supabase.from("receipts").insert(payload).select().single();
     if (rErr || !rcpt) {
       setSaving(false);
       return setError(rErr?.message ?? "Could not save the receipt.");
     }
 
-    // 2. its allocations against invoices
+    // 2. its allocations — replaced wholesale when editing, so the row set matches the form
+    if (editingId) {
+      const { error: dErr } = await supabase.from("receipt_allocations").delete().eq("receipt_id", editingId);
+      if (dErr) {
+        setSaving(false);
+        return setError(dErr.message);
+      }
+    }
     const rows = openInvoices
       .map((inv) => ({ receipt_id: rcpt.id, invoice_id: inv.id, amount: Number(alloc[inv.id]) || 0 }))
       .filter((r) => r.amount > 0);
@@ -314,9 +378,12 @@ export default function ReceiptEntryPage() {
     const relevantServiceNotes = Object.fromEntries(
       Object.entries(serviceNotes).filter(([invId, note]) => allocatedInvoiceIds.has(invId) && note.trim() !== "")
     );
-    if (deductions.length > 0 || Object.keys(relevantServiceNotes).length > 0) {
-      setReceiptExtras(rcpt.id, { deductions, serviceNotes: relevantServiceNotes });
-    }
+    setReceiptExtras(rcpt.id, { deductions, serviceNotes: relevantServiceNotes });
+
+    // 2c. Invoices this receipt used to pay but no longer does: their status is now
+    // stale ("paid" with nothing paying for it), so re-derive it from the database.
+    const dropped = previouslyAllocated.filter((id) => !allocatedInvoiceIds.has(id));
+    await recomputeStatuses(dropped);
 
     // 3. flip each touched invoice's status (paid when fully settled, else partial).
     // A deduction counts toward settling an invoice in proportion to how much of
@@ -334,12 +401,15 @@ export default function ReceiptEntryPage() {
       }
     }
 
+    const wasEditing = editingId !== null;
     setSaving(false);
     setOpen(false);
+    setEditingId(null);
     setSuccess(
-      `Receipt ${receiptNo.trim()} saved — ${formatMoney(amountNum)} received` +
+      `Receipt ${receiptNo.trim()} ${wasEditing ? "updated" : "saved"} — ${formatMoney(amountNum)} received` +
         (rows.length ? `, allocated across ${rows.length} invoice${rows.length > 1 ? "s" : ""}` : "") +
         (deductionsTotal > 0 ? `, plus ${formatMoney(deductionsTotal)} in deductions` : "") +
+        (dropped.length ? `. ${dropped.length} invoice${dropped.length > 1 ? "s" : ""} re-opened` : "") +
         ".",
     );
     loadAll();
@@ -371,14 +441,31 @@ export default function ReceiptEntryPage() {
       key: "actions",
       header: "Actions",
       sortable: false,
-      className: "w-24 text-right",
+      className: "w-28 text-right",
       render: (r) => (
-        <button
-          onClick={() => setConfirmDelete({ ids: [r.id], label: `receipt ${r.receipt_no}` })}
-          className="rounded-lg px-2.5 py-1 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
-        >
-          Delete
-        </button>
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={() => setViewing(r)}
+            title="View"
+            className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Icon name="eye" size={16} />
+          </button>
+          <button
+            onClick={() => openEdit(r)}
+            title="Edit"
+            className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Icon name="pencil" size={16} />
+          </button>
+          <button
+            onClick={() => setConfirmDelete({ ids: [r.id], label: `receipt ${r.receipt_no}` })}
+            title="Delete"
+            className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-900/30"
+          >
+            <Icon name="trash" size={16} />
+          </button>
+        </div>
       ),
     },
   ];
@@ -411,7 +498,9 @@ export default function ReceiptEntryPage() {
 
       {open && (
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-          <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">New Receipt</h3>
+          <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
+            {editingId ? `Edit Receipt ${receiptNo}` : "New Receipt"}
+          </h3>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <FormField label="Receipt No">
@@ -675,6 +764,21 @@ export default function ReceiptEntryPage() {
         </div>
       )}
 
+      {viewing && (
+        <ReceiptView
+          receipt={viewing}
+          customer={customerById.get(viewing.customer_id) ?? null}
+          allocations={allocations.filter((a) => a.receipt_id === viewing.id)}
+          invoices={invoices}
+          onEdit={() => {
+            const r = viewing;
+            setViewing(null);
+            openEdit(r);
+          }}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
       {confirmDelete && (
         <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
           <div
@@ -759,6 +863,147 @@ export default function ReceiptEntryPage() {
   no deductions column in the backend, so the caller saves the result locally
   against the receipt's id (lib/receiptExtras.ts) rather than to Supabase.
 */
+/*
+  Read-only view of one receipt: its header, then exactly which invoices the money
+  was knocked off and how much went to each. Any money not tied to an invoice is
+  shown as unallocated rather than quietly dropped.
+*/
+function ReceiptView({
+  receipt,
+  customer,
+  allocations,
+  invoices,
+  onEdit,
+  onClose,
+}: {
+  receipt: Receipt;
+  customer: Customer | null;
+  allocations: ReceiptAllocation[];
+  invoices: Invoice[];
+  onEdit: () => void;
+  onClose: () => void;
+}) {
+  const extras = getReceiptExtras(receipt.id);
+  const invoiceById = new Map(invoices.map((i) => [i.id, i]));
+  const allocated = allocations.reduce((s, a) => s + Number(a.amount), 0);
+  const deductions = deductionTotal(extras.deductions);
+  const unallocated = Number(receipt.amount) + deductions - allocated;
+
+  const Field = ({ label, value }: { label: string; value: string }) => (
+    <div>
+      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-0.5 text-sm font-medium text-slate-800 dark:text-slate-200">{value}</p>
+    </div>
+  );
+
+  return createPortal(
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in" onClick={onClose} />
+      <div className="relative z-10 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-drawer animate-scale-in dark:bg-slate-900">
+        <div className="mb-4 grid h-11 w-11 place-items-center rounded-full bg-brand/10 text-brand dark:bg-brand/15 dark:text-brand-light">
+          <Icon name="receipt" size={20} />
+        </div>
+        <h3 className="text-base font-bold text-slate-900 dark:text-white">Receipt {receipt.receipt_no}</h3>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{customer?.name ?? "Unknown customer"}</p>
+
+        <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Field label="Date" value={receipt.receipt_date} />
+          <Field label="Amount" value={formatMoney(Number(receipt.amount))} />
+          <Field label="Mode" value={receipt.mode.toUpperCase()} />
+          <Field label="Reference" value={receipt.reference || "—"} />
+        </div>
+
+        <h4 className="mt-6 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Applied to these invoices
+        </h4>
+        <div className="mt-2 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-left dark:border-slate-800 dark:bg-slate-800/50">
+                <th className="px-3 py-2.5 font-semibold text-slate-600 dark:text-slate-300">Invoice</th>
+                <th className="px-3 py-2.5 font-semibold text-slate-600 dark:text-slate-300">Due date</th>
+                <th className="px-3 py-2.5 text-right font-semibold text-slate-600 dark:text-slate-300">
+                  Invoice total
+                </th>
+                <th className="px-3 py-2.5 text-right font-semibold text-slate-600 dark:text-slate-300">
+                  Applied
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {allocations.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-3 py-8 text-center text-xs text-slate-400">
+                    This receipt isn&apos;t applied to any invoice — it sits as an unallocated advance.
+                  </td>
+                </tr>
+              ) : (
+                allocations.map((a) => {
+                  const inv = invoiceById.get(a.invoice_id);
+                  const note = extras.serviceNotes[a.invoice_id];
+                  return (
+                    <tr key={a.id} className="border-b border-slate-100 last:border-0 dark:border-slate-800">
+                      <td className="px-3 py-2.5">
+                        <Link href={`/invoices/${a.invoice_id}`} className="font-medium text-brand hover:underline">
+                          {inv?.invoice_no ?? "—"}
+                        </Link>
+                        {note && <p className="text-[11px] text-slate-400">{note}</p>}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-600 dark:text-slate-400">{inv?.due_date ?? "—"}</td>
+                      <td className="px-3 py-2.5 text-right text-slate-600 dark:text-slate-400">
+                        {inv ? formatMoney(Number(inv.total)) : "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-slate-900 dark:text-white">
+                        {formatMoney(Number(a.amount))}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-3 space-y-1 text-sm">
+          <div className="flex justify-between text-slate-600 dark:text-slate-400">
+            <span>Allocated</span>
+            <span className="tabular-nums">{formatMoney(allocated)}</span>
+          </div>
+          {deductions > 0 && (
+            <div className="flex justify-between text-slate-600 dark:text-slate-400">
+              <span>Deductions (TDS, charges…)</span>
+              <span className="tabular-nums">{formatMoney(deductions)}</span>
+            </div>
+          )}
+          {Math.abs(unallocated) > 0.005 && (
+            <div className="flex justify-between font-medium text-amber-600 dark:text-amber-400">
+              <span>Unallocated</span>
+              <span className="tabular-nums">{formatMoney(unallocated)}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            Close
+          </button>
+          <button
+            onClick={onEdit}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark"
+          >
+            <Icon name="pencil" size={15} />
+            Edit receipt
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function DeductionDialog({
   open,
   glAccounts,
