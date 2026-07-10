@@ -55,6 +55,10 @@ const num = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
 const dt = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" });
 const dmed = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
 
+/** Secondary button — solid enough to read as clickable next to the primary brand button. */
+const secondaryBtn =
+  "inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-brand hover:bg-brand/5 hover:text-brand dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:hover:border-brand dark:hover:text-brand-light";
+
 /** Don't re-chase anyone reminded within this many days (auto-unticked). */
 const RECENT_DAYS = 3;
 
@@ -661,10 +665,8 @@ export default function AutoEmailShootPage() {
           title="Auto Email Shoot"
           subtitle="Reminders sent — every one below was logged to the reminders table."
           action={
-            <button
-              onClick={load}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
+            <button onClick={load} className={secondaryBtn}>
+              <Icon name="chevronLeft" size={16} />
               Back to overdue list
             </button>
           }
@@ -714,7 +716,6 @@ export default function AutoEmailShootPage() {
       { key: "customer_name", header: "Customer", className: "font-medium" },
       { key: "invoice_no", header: "Invoice", className: "w-28" },
       { key: "to_email", header: "Email", render: (r) => r.to_email ?? <span className="text-slate-400">—</span> },
-      { key: "subject", header: "Subject" },
       {
         key: "status",
         header: "Status",
@@ -732,10 +733,8 @@ export default function AutoEmailShootPage() {
           title="Auto Email Shoot"
           subtitle="Every reminder ever logged, newest first."
           action={
-            <button
-              onClick={() => setView("compose")}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
+            <button onClick={() => setView("compose")} className={secondaryBtn}>
+              <Icon name="chevronLeft" size={16} />
               Back to chasing
             </button>
           }
@@ -759,16 +758,12 @@ export default function AutoEmailShootPage() {
         subtitle="One email per overdue customer, covering all their overdue invoices. Click a row to preview."
         action={
           <div className="flex items-center gap-2">
-            <Link
-              href="/reminders/template"
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
+            <Link href="/reminders/template" className={secondaryBtn}>
+              <Icon name="pencil" size={16} />
               Edit templates
             </Link>
-            <button
-              onClick={() => setView("history")}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-            >
+            <button onClick={() => setView("history")} className={secondaryBtn}>
+              <Icon name="clock" size={16} />
               Sent history
             </button>
             <button
