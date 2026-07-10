@@ -439,7 +439,8 @@ export default function CustomerMasterPage() {
     },
     {
       key: "actions",
-      header: "",
+      header: "Actions",
+      sortable: false,
       className: "w-32 text-right",
       render: (c) => (
         <div className="flex justify-end gap-1">

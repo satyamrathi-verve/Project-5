@@ -595,7 +595,8 @@ export default function AutoEmailShootPage() {
     },
     {
       key: "open",
-      header: "",
+      header: "Actions",
+      sortable: false,
       className: "w-20 text-right",
       render: (r) => (
         <span className="inline-flex items-center gap-2.5">
