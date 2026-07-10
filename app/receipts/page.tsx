@@ -265,6 +265,14 @@ export default function ReceiptEntryPage() {
     setOpen(true);
   }
 
+  /** Leave the form without saving. Clears edit mode so the list and the
+   *  allocation maths go back to their normal (non-editing) behaviour. */
+  function closeForm() {
+    setOpen(false);
+    setEditingId(null);
+    setError(null);
+  }
+
   function openForm() {
     setEditingId(null);
     setReceiptNo(nextReceiptNo(receipts));
@@ -498,9 +506,19 @@ export default function ReceiptEntryPage() {
 
       {open && (
         <div className="mb-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900">
-          <h3 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
-            {editingId ? `Edit Receipt ${receiptNo}` : "New Receipt"}
-          </h3>
+          <div className="mb-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={closeForm}
+              title="Back to receipts"
+              className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand dark:text-slate-400 dark:hover:bg-slate-800"
+            >
+              <Icon name="chevronLeft" size={18} />
+            </button>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+              {editingId ? `Edit Receipt ${receiptNo}` : "New Receipt"}
+            </h3>
+          </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <FormField label="Receipt No">
@@ -755,7 +773,7 @@ export default function ReceiptEntryPage() {
               {saving ? "Saving…" : "Save Receipt"}
             </button>
             <button
-              onClick={() => setOpen(false)}
+              onClick={closeForm}
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
             >
               Cancel
