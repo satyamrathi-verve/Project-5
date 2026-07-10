@@ -110,7 +110,7 @@ const numIN = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
 const dmed = new Intl.DateTimeFormat("en-IN", { dateStyle: "medium" });
 const rs = (n: number) => `Rs ${numIN.format(n)}`;
 
-const BRAND: [number, number, number] = [79, 70, 229]; // indigo-600, the app's brand colour
+const BRAND: [number, number, number] = [13, 148, 136]; // teal-600, the app's brand colour
 
 /** Generate and save the real .pdf file for one customer's statement. */
 export async function downloadStatementPdf(

@@ -41,8 +41,8 @@ export function SignIn() {
         <div className="pointer-events-none absolute inset-0 opacity-[0.15] [background-image:radial-gradient(circle_at_center,rgba(255,255,255,0.5)_1px,transparent_1px)] [background-size:22px_22px]" />
         {/* floating glows */}
         <div className="signin-float pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-white/15 blur-3xl" />
-        <div className="signin-float-slow pointer-events-none absolute -bottom-32 -left-16 h-96 w-96 rounded-full bg-indigo-400/20 blur-3xl" />
-        <div className="signin-float pointer-events-none absolute right-10 bottom-24 h-40 w-40 rounded-full bg-violet-300/20 blur-2xl" style={{ animationDelay: "2s" }} />
+        <div className="signin-float-slow pointer-events-none absolute -bottom-32 -left-16 h-96 w-96 rounded-full bg-teal-400/20 blur-3xl" />
+        <div className="signin-float pointer-events-none absolute right-10 bottom-24 h-40 w-40 rounded-full bg-cyan-300/20 blur-2xl" style={{ animationDelay: "2s" }} />
 
         <div className="signin-anim relative flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 text-lg font-black ring-1 ring-white/30 backdrop-blur">

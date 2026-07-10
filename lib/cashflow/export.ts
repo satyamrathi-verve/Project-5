@@ -162,7 +162,7 @@ export function printReport(ctx: ExportContext): void {
       h1{font-size:20px;margin:0 0 4px} .sub{color:#64748b;font-size:13px;margin:0 0 20px}
       table{width:100%;border-collapse:collapse;font-size:12px}
       th,td{text-align:left;padding:7px 10px;border-bottom:1px solid #e2e8f0}
-      th{background:#4f46e5;color:#fff;font-weight:600}
+      th{background:#0d9488;color:#fff;font-weight:600}
       td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
       tr:nth-child(even) td{background:#f8fafc}
       .empty{color:#94a3b8;padding:24px;text-align:center}

@@ -18,9 +18,9 @@ const config: Config = {
       },
       colors: {
         brand: {
-          DEFAULT: "#4f46e5", // indigo-600 — premium SaaS accent
-          dark: "#4338ca",
-          light: "#6366f1",
+          DEFAULT: "#0d9488", // teal-600 — treasury/fintech accent
+          dark: "#0f766e",
+          light: "#14b8a6",
         },
       },
       boxShadow: {

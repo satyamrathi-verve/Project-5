@@ -15,7 +15,7 @@ import type { BalancePoint, ForecastPoint, PeriodPoint, Slice } from "@/lib/cash
 import { EmptyState } from "./ui";
 
 // Shared categorical palette (hex so it works in SVG fill + legend swatches).
-export const PALETTE = ["#4f46e5", "#10b981", "#f59e0b", "#0ea5e9", "#f43f5e", "#8b5cf6", "#94a3b8"];
+export const PALETTE = ["#0d9488", "#f59e0b", "#6366f1", "#0ea5e9", "#f43f5e", "#8b5cf6", "#94a3b8"];
 
 const W = 760;
 const H = 240;

@@ -394,7 +394,7 @@ function InvoiceDocument({
 
   return (
     <div className="mx-auto max-w-3xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm print:max-w-none print:rounded-none print:border-0 print:shadow-none">
-      {/* Brand header band — derived from the brand indigo so it agrees with the
+      {/* Brand header band — derived from the brand colour so it agrees with the
           Total bar further down (these used to be two unrelated blues). */}
       <div className="flex items-start justify-between gap-6 bg-gradient-to-r from-brand-dark via-brand to-brand-light px-10 py-7 text-white print:px-[16mm] print:py-[12mm]">
         <div>
