@@ -167,9 +167,9 @@ export default function AutoEmailShootPage() {
       ensureTierTemplates(supabase),
       supabase.from("customers").select("id, name, email"),
       supabase.from("invoices").select("id, invoice_no, customer_id, due_date, total, status"),
-      supabase.from("receipt_allocations").select("invoice_id, amount"),
+      supabase.from("receipt_allocations").select("invoice_id, receipt_id, amount"),
       supabase.from("reminder_log").select("invoice_id, to_email, subject, status, sent_at").order("sent_at", { ascending: false }),
-      supabase.from("receipts").select("customer_id, receipt_date, amount"),
+      supabase.from("receipts").select("id, receipt_date"),
     ]);
 
     const firstError = custRes.error || invRes.error || allocRes.error || logRes.error || rcptRes.error;
@@ -181,9 +181,11 @@ export default function AutoEmailShootPage() {
 
     setTemplates(tplRows);
 
+    const allocations = (allocRes.data ?? []) as { invoice_id: string; receipt_id: string; amount: number }[];
+
     // Sum how much has been knocked off each invoice.
     const paidByInvoice = new Map<string, number>();
-    for (const a of (allocRes.data ?? []) as { invoice_id: string; amount: number }[]) {
+    for (const a of allocations) {
       paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
     }
 
@@ -217,24 +219,32 @@ export default function AutoEmailShootPage() {
       }
     }
 
-    // Receipts per customer, oldest first — to spot payments that came in AFTER a mail.
-    const receiptsByCustomer = new Map<string, { date: string; amount: number }[]>();
-    for (const r of (rcptRes.data ?? []) as { customer_id: string; receipt_date: string; amount: number }[]) {
-      const arr = receiptsByCustomer.get(r.customer_id) ?? [];
-      arr.push({ date: r.receipt_date, amount: Number(r.amount) });
-      receiptsByCustomer.set(r.customer_id, arr);
+    // Money knocked off each INVOICE, oldest first — a reminder chases one invoice,
+    // so only a receipt allocated to THAT invoice counts as a payment against it.
+    const receiptDateById = new Map<string, string>();
+    for (const r of (rcptRes.data ?? []) as { id: string; receipt_date: string }[]) {
+      receiptDateById.set(r.id, r.receipt_date);
     }
-    for (const arr of receiptsByCustomer.values()) arr.sort((a, b) => (a.date < b.date ? -1 : 1));
+    const paymentsByInvoice = new Map<string, { date: string; amount: number }[]>();
+    for (const a of allocations) {
+      const date = receiptDateById.get(a.receipt_id);
+      if (!date) continue;
+      const arr = paymentsByInvoice.get(a.invoice_id) ?? [];
+      arr.push({ date, amount: Number(a.amount) });
+      paymentsByInvoice.set(a.invoice_id, arr);
+    }
+    for (const arr of paymentsByInvoice.values()) arr.sort((a, b) => (a.date < b.date ? -1 : 1));
 
     // Build the "sent history" view (every logged reminder, newest first).
     setHistory(
       logRows.map((l, i) => {
         const inv = l.invoice_id ? invById.get(l.invoice_id) : undefined;
         const cust = inv ? custById.get(inv.customer_id) : undefined;
-        // Did a payment land AFTER this mail? First receipt on a later calendar day.
+        // Did a payment land against THIS invoice after this mail went out?
+        // (Allocated on a later calendar day than the send.)
         const sentDay = l.sent_at.slice(0, 10);
-        const laterReceipts = inv ? receiptsByCustomer.get(inv.customer_id) ?? [] : [];
-        const hit = laterReceipts.find((r) => r.date > sentDay) ?? null;
+        const laterPayments = l.invoice_id ? paymentsByInvoice.get(l.invoice_id) ?? [] : [];
+        const hit = laterPayments.find((p) => p.date > sentDay) ?? null;
         return {
           id: `${l.invoice_id ?? "x"}-${i}`,
           invoice_no: inv?.invoice_no ?? "—",

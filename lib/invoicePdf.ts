@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Company, Customer } from "./types";
+import { logoWidthFor, type LoadedLogo } from "./logo";
 
 /*
   Builds a real .pdf of one sales invoice (jsPDF + autotable), matching the
@@ -28,6 +29,8 @@ export interface InvoicePdfInput {
   paid: number;
   outstanding: number;
   amountInWords: string;
+  /** Official letterhead logo. Omit (or pass null) to draw the text wordmark. */
+  logo?: LoadedLogo | null;
 }
 
 const numIN2 = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -47,11 +50,16 @@ export function buildInvoicePdf(d: InvoicePdfInput): jsPDF {
   const H = doc.internal.pageSize.getHeight();
   const M = 40;
 
-  // ---- Letterhead ----
-  doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(...VERVE);
-  doc.text("verve", M, 54);
-  doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40);
-  doc.text("Advisory", M + 3, 68);
+  // ---- Letterhead: official logo, or the drawn wordmark if it isn't installed ----
+  if (d.logo) {
+    const h = 40;
+    doc.addImage(d.logo.dataUrl, "PNG", M, 30, logoWidthFor(d.logo, h), h);
+  } else {
+    doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(...VERVE);
+    doc.text("verve", M, 54);
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40);
+    doc.text("Advisory", M + 3, 68);
+  }
 
   doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(110);
   let cy = 86;

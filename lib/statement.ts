@@ -1,4 +1,5 @@
 import type { Company, Customer, Invoice, Receipt } from "./types";
+import { loadLogo, logoWidthFor } from "./logo";
 
 /*
   Shared "account statement" logic:
@@ -121,42 +122,51 @@ export async function downloadStatementPdf(
   // Loaded on demand so screens don't pay for jsPDF until someone downloads.
   const { jsPDF } = await import("jspdf");
   const autoTable = (await import("jspdf-autotable")).default;
+  const logo = await loadLogo();
 
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const W = doc.internal.pageSize.getWidth();
   const M = 40;
 
-  // Company header
-  doc.setFont("helvetica", "bold").setFontSize(16).setTextColor(20);
-  doc.text(company?.name ?? "Account Statement", M, 50);
+  // Letterhead: the official logo, or the drawn wordmark if it isn't installed.
+  if (logo) {
+    const h = 40;
+    doc.addImage(logo.dataUrl, "PNG", M, 28, logoWidthFor(logo, h), h);
+  } else {
+    doc.setFont("helvetica", "bold").setFontSize(22).setTextColor(...BRAND);
+    doc.text("verve", M, 52);
+    doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(40);
+    doc.text("Advisory", M + 3, 65);
+  }
+
   doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(110);
-  if (company?.address) doc.text(company.address, M, 64);
+  if (company?.address) doc.text(company.address, M, 80);
   const companyLine = [company?.gstin ? `GSTIN: ${company.gstin}` : null, company?.email, company?.phone]
     .filter(Boolean)
     .join("  ·  ");
-  if (companyLine) doc.text(companyLine, M, 76);
+  if (companyLine) doc.text(companyLine, M, 92);
 
   doc.setFont("helvetica", "bold").setFontSize(13).setTextColor(...BRAND);
   doc.text("ACCOUNT STATEMENT", W - M, 50, { align: "right" });
   doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(110);
   doc.text(`As at ${dmed.format(new Date())}`, W - M, 64, { align: "right" });
 
-  doc.setDrawColor(226, 232, 240).line(M, 88, W - M, 88);
+  doc.setDrawColor(226, 232, 240).line(M, 104, W - M, 104);
 
   // Customer block
-  doc.setFontSize(8).setTextColor(150).text("STATEMENT FOR", M, 106);
+  doc.setFontSize(8).setTextColor(150).text("STATEMENT FOR", M, 122);
   doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(20);
-  doc.text(`${customer.name} (${customer.code})`, M, 120);
+  doc.text(`${customer.name} (${customer.code})`, M, 136);
   doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(110);
   const customerLine = [customer.address, customer.email ?? "no email on file", customer.phone]
     .filter(Boolean)
     .join("  ·  ");
-  doc.text(customerLine, M, 133);
+  doc.text(customerLine, M, 149);
 
   // Summary — the holistic picture
   const s = stmt.summary;
   autoTable(doc, {
-    startY: 148,
+    startY: 164,
     theme: "grid",
     margin: { left: M, right: M },
     styles: { font: "helvetica", fontSize: 8.5, cellPadding: 6, textColor: 30 },

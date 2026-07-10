@@ -381,11 +381,13 @@ export default function InvoiceViewPage() {
     let doc: import("jspdf").jsPDF | null = null;
     try {
       const { buildInvoicePdf } = await import("@/lib/invoicePdf");
+      const { loadLogo } = await import("@/lib/logo");
       doc = buildInvoicePdf({
         invoiceNo: inv.invoice_no,
         status: inv.status,
         invoiceDate: inv.invoice_date,
         dueDate: inv.due_date,
+        logo: await loadLogo(),
         company,
         customer,
         items: items.map((it) => ({

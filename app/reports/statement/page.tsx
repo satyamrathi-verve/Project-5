@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { inputClass } from "@/components/FormField";
 import { Icon } from "@/components/icons";
+import { VerveLogo } from "@/components/VerveLogo";
 import { buildStatement, downloadStatementPdf } from "@/lib/statement";
 
 /*
@@ -167,8 +168,9 @@ function StatementInner() {
           {/* Company + title */}
           <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-5 dark:border-slate-800">
             <div>
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white print:text-black">{company?.name ?? "—"}</h2>
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{company?.address}</p>
+              {/* Letterhead: the official logo stands in for the company name */}
+              <VerveLogo className="text-[16px]" />
+              <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">{company?.address}</p>
               <p className="text-sm text-slate-500 dark:text-slate-400">
                 {company?.gstin && <>GSTIN: {company.gstin} · </>}
                 {company?.email} · {company?.phone}
