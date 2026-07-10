@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { SignIn } from "@/components/SignIn";
-import { getSession, onAuthChange, type Session } from "@/lib/auth";
+import {
+  consumeIdleSignOut,
+  getSession,
+  msUntilIdleTimeout,
+  onAuthChange,
+  signOut,
+  touchActivity,
+  type Session,
+} from "@/lib/auth";
 import { canAccessPath, useCurrentAccess } from "@/lib/users";
 import { visibleNavSections } from "@/components/Nav";
 import { Icon } from "@/components/icons";
@@ -19,18 +27,68 @@ import { Icon } from "@/components/icons";
   Because auth lives in localStorage we can only read it in the browser, so we
   wait for `ready` before deciding — that avoids a flash of the wrong screen.
 */
+/** Activity that counts as "the user is still here". */
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const [idleNotice, setIdleNotice] = useState(false);
   const pathname = usePathname();
   const { ready: accessReady, user } = useCurrentAccess();
 
+  const sync = useCallback(() => {
+    setSession(getSession());
+    if (consumeIdleSignOut()) setIdleNotice(true);
+  }, []);
+
   useEffect(() => {
-    const sync = () => setSession(getSession());
     sync();
     setReady(true);
     return onAuthChange(sync);
-  }, []);
+  }, [sync]);
+
+  // Idle sign-out. Every interaction stamps the clock (throttled to once a
+  // second); a timer fires when the remaining idle time runs out. Navigating
+  // between screens also counts, via the pathname dependency.
+  const lastTouch = useRef(0);
+  useEffect(() => {
+    if (!session) return;
+
+    const onActivity = () => {
+      const now = Date.now();
+      if (now - lastTouch.current < 1000) return;
+      lastTouch.current = now;
+      touchActivity();
+    };
+    onActivity();
+
+    ACTIVITY_EVENTS.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
+
+    // Re-check on a timer rather than one long timeout, so a laptop waking from
+    // sleep signs out immediately instead of waiting out a stale timer.
+    const tick = window.setInterval(() => {
+      if (msUntilIdleTimeout() <= 0) {
+        signOut({ idle: true });
+        setIdleNotice(true);
+      }
+    }, 15_000);
+
+    // Coming back to the tab is the moment a lapsed session should be noticed.
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && msUntilIdleTimeout() <= 0) {
+        signOut({ idle: true });
+        setIdleNotice(true);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      ACTIVITY_EVENTS.forEach((e) => window.removeEventListener(e, onActivity));
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(tick);
+    };
+  }, [session, pathname]);
 
   if (!ready) {
     return (
@@ -40,7 +98,28 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!session) return <SignIn />;
+  if (!session) {
+    return (
+      <>
+        {idleNotice && (
+          <div className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-4">
+            <div className="flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 shadow-lg dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <Icon name="clock" size={17} />
+              <span>Signed out after 15 minutes of inactivity. Please sign in again.</span>
+              <button
+                onClick={() => setIdleNotice(false)}
+                className="ml-1 rounded p-0.5 text-amber-700 hover:text-amber-900 dark:text-amber-400"
+                aria-label="Dismiss"
+              >
+                <Icon name="close" size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+        <SignIn />
+      </>
+    );
+  }
 
   if (accessReady && !canAccessPath(user?.permissions ?? null, pathname)) {
     const fallback = visibleNavSections(user?.permissions ?? null)[0]?.links.find((l) => l.href)?.href ?? "/";
