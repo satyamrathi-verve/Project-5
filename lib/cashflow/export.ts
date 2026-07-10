@@ -198,6 +198,8 @@ export function printHtml(title: string, subtitle: string | undefined, bodyHtml:
       th{color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
       td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
       .section{font-weight:700;background:#f1f5f9}
+      .subtotal{font-weight:700;border-top:1px solid #cbd5e1}
+      .indent td:first-child,td.indent{padding-left:24px;color:#334155}
       .total{font-weight:700;border-top:2px solid #cbd5e1}
       @media print{body{margin:12mm}}
     </style></head><body>

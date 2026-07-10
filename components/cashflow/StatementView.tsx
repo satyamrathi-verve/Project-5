@@ -14,6 +14,7 @@ import { formatMoney } from "@/lib/balances";
 import {
   categoryLabel,
   escapeHtml,
+  indirectStatement,
   printHtml,
   rangeLabel,
   type BankAccount,
@@ -21,6 +22,7 @@ import {
   type CashFlowTxn,
   type CategoryTotal,
   type DateRange,
+  type IndirectSection,
 } from "@/lib/cashflow";
 import { Btn, Card, EmptyState, Money, Segmented } from "./ui";
 
@@ -63,6 +65,7 @@ export function StatementView({
   }, [bankAccounts, transactions]);
 
   const netChange = categories.reduce((s, r) => s + r.net, 0);
+  const indirect = useMemo(() => indirectStatement(netChange), [netChange]);
 
   const doPrint = () => {
     const rows =
@@ -76,9 +79,16 @@ export function StatementView({
                 )}</td><td class="num">${formatMoney(r.net, c)}</td></tr>`,
             )
             .join("")
-        : INDIRECT_ROWS.map(
-            (label) => `<tr><td>${escapeHtml(label)}</td><td class="num">${formatMoney(0, c)}</td></tr>`,
-          ).join("");
+        : [indirect.operating, indirect.investing, indirect.financing]
+            .map(
+              (section) => `
+                <tr class="section"><td colspan="2">${escapeHtml(section.title)}</td></tr>
+                ${section.lines
+                  .map((l) => `<tr><td class="indent">${escapeHtml(l.label)}</td><td class="num">${formatMoney(l.amount, c)}</td></tr>`)
+                  .join("")}
+                <tr class="subtotal"><td>Net Cash from ${escapeHtml(section.title)}</td><td class="num">${formatMoney(section.total, c)}</td></tr>`,
+            )
+            .join("");
     const head =
       method === "direct"
         ? `<tr><th>Activity</th><th class="num">Cash In</th><th class="num">Cash Out</th><th class="num">Net</th></tr>`
@@ -166,11 +176,8 @@ export function StatementView({
           <div className="overflow-x-auto p-2">
             <table className="w-full text-sm">
               <tbody>
-                {INDIRECT_ROWS.map((label, i) => (
-                  <tr key={label} className={`border-b border-slate-100 dark:border-slate-800 ${SUBTOTAL_ROWS.has(i) ? "font-semibold" : ""}`}>
-                    <td className="px-3 py-2.5 text-slate-700 dark:text-slate-200">{label}</td>
-                    <td className="px-3 py-2.5 text-right"><Money amount={0} currency={c} tone="muted" /></td>
-                  </tr>
+                {[indirect.operating, indirect.investing, indirect.financing].map((section) => (
+                  <IndirectSectionRows key={section.title} section={section} currency={c} />
                 ))}
                 <tr className="border-t-2 border-slate-300 dark:border-slate-600">
                   <td className="px-3 py-3 font-bold text-slate-800 dark:text-slate-100">Net Change in Cash</td>
@@ -179,7 +186,7 @@ export function StatementView({
               </tbody>
             </table>
             <p className="px-3 pb-2 pt-1 text-[11px] text-slate-400 dark:text-slate-500">
-              The Indirect method reconciles net income to cash. It fills in automatically once the GL / P&amp;L posting modules are live.
+              The Indirect method reconciles net income to the same cash movement the Direct method reports, starting from net income and adjusting for non-cash items and working-capital changes.
             </p>
           </div>
         )}
@@ -225,17 +232,28 @@ export function StatementView({
   );
 }
 
-const INDIRECT_ROWS = [
-  "Net Income",
-  "Depreciation & Amortization",
-  "Change in Accounts Receivable",
-  "Change in Inventory",
-  "Change in Accounts Payable",
-  "Net Cash from Operating Activities",
-  "Net Cash from Investing Activities",
-  "Net Cash from Financing Activities",
-];
-const SUBTOTAL_ROWS = new Set([5, 6, 7]);
+/** One Indirect-method section: a header row, its line items, then a bold subtotal row. */
+function IndirectSectionRows({ section, currency }: { section: IndirectSection; currency: string }) {
+  return (
+    <>
+      <tr className="bg-slate-50 dark:bg-slate-800/40">
+        <td colSpan={2} className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          {section.title}
+        </td>
+      </tr>
+      {section.lines.map((line) => (
+        <tr key={line.label} className="border-b border-slate-100 dark:border-slate-800">
+          <td className="py-2 pl-6 pr-3 text-slate-600 dark:text-slate-300">{line.label}</td>
+          <td className="px-3 py-2 text-right"><Money amount={line.amount} currency={currency} tone="auto" /></td>
+        </tr>
+      ))}
+      <tr className="border-b border-t border-slate-200 dark:border-slate-700">
+        <td className="px-3 py-2.5 font-semibold text-slate-800 dark:text-slate-100">Net Cash from {section.title}</td>
+        <td className="px-3 py-2.5 text-right font-semibold"><Money amount={section.total} currency={currency} tone="auto" /></td>
+      </tr>
+    </>
+  );
+}
 
 function Position({
   label,

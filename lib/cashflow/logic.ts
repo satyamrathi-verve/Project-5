@@ -178,6 +178,97 @@ export function categoryTotals(txns: CashFlowTxn[]): CategoryTotal[] {
   return order.map((c) => map.get(c)!);
 }
 
+// ── Statement (indirect method) ──────────────────────────────────────────────
+//
+// Reconciles net income to net cash the standard way: start from Net Income,
+// add back non-cash items, adjust for the swing in each working-capital
+// account, then Investing and Financing activities. There's no P&L/balance-
+// sheet posting yet to derive these from, so each line is a realistic,
+// proportionally-scaled share of the SAME `netChange` the Direct method
+// already reports (see lib/cashflow/demo.ts's Direct-method demo figures) —
+// never an independent number. The last line in each section is a rounding
+// "plug", and Financing's own TOTAL is the top-level plug, so the three
+// section subtotals always sum to *exactly* netChange, to the rupee — for
+// today's demo range or any future filter, not just the current default.
+
+export interface IndirectLine {
+  label: string;
+  amount: number;
+}
+export interface IndirectSection {
+  title: string;
+  lines: IndirectLine[];
+  total: number;
+}
+export interface IndirectStatement {
+  operating: IndirectSection;
+  investing: IndirectSection;
+  financing: IndirectSection;
+  netChange: number;
+}
+
+// Each ratio is (illustrative rupee amount) / DEMO_NET_CHANGE, so at today's
+// demo net change (₹17,70,000) the statement reads exactly as designed below;
+// every line scales proportionally — and still reconciles exactly — for any
+// other netChange a filter produces.
+const DEMO_NET_CHANGE = 1_770_000;
+const OPERATING_RATIOS: [string, number][] = [
+  ["Net Income", 2_900_000 / DEMO_NET_CHANGE],
+  ["Depreciation & Amortization", 420_000 / DEMO_NET_CHANGE],
+  ["Change in Accounts Receivable", -480_000 / DEMO_NET_CHANGE],
+  ["Change in Inventory", -310_000 / DEMO_NET_CHANGE],
+  ["Change in Prepaid Expenses", -60_000 / DEMO_NET_CHANGE],
+  ["Change in Accounts Payable", 260_000 / DEMO_NET_CHANGE],
+  ["Change in Accrued Expenses", 85_000 / DEMO_NET_CHANGE],
+  ["Change in Taxes Payable", 110_000 / DEMO_NET_CHANGE],
+  // last line absorbs this section's own rounding — always exact, never fake.
+  ["Other Non-Cash Adjustments", 275_000 / DEMO_NET_CHANGE],
+];
+const OPERATING_TOTAL_RATIO = 3_200_000 / DEMO_NET_CHANGE;
+
+const INVESTING_RATIOS: [string, number][] = [
+  ["Purchase of Fixed Assets", -1_150_000 / DEMO_NET_CHANGE],
+  ["Sale of Fixed Assets", 180_000 / DEMO_NET_CHANGE],
+  ["Capital Investments", 70_000 / DEMO_NET_CHANGE],
+];
+const INVESTING_TOTAL_RATIO = -900_000 / DEMO_NET_CHANGE;
+
+const FINANCING_RATIOS: [string, number][] = [
+  ["Loan Proceeds", 500_000 / DEMO_NET_CHANGE],
+  ["Loan Repayments", -720_000 / DEMO_NET_CHANGE],
+  ["Share Capital", 150_000 / DEMO_NET_CHANGE],
+  ["Dividend Payments", -460_000 / DEMO_NET_CHANGE],
+];
+// Financing has no fixed total ratio: its total is the exact top-level plug
+// (netChange − operating − investing), guaranteeing the grand reconciliation.
+
+/** Build one section's line items, rounding every line, with the LAST line
+ *  absorbing whatever rounding remainder is left so the lines sum to exactly `total`. */
+function buildSection(title: string, ratios: [string, number][], netChange: number, total: number): IndirectSection {
+  const lines: IndirectLine[] = ratios.map(([label, ratio]) => ({ label, amount: Math.round(netChange * ratio) }));
+  const runningSum = lines.slice(0, -1).reduce((s, l) => s + l.amount, 0);
+  lines[lines.length - 1].amount = total - runningSum; // exact plug
+  return { title, lines, total };
+}
+
+/**
+ * The Indirect-method Cash Flow Statement, reconciling exactly to `netChange`
+ * (the same Net Change in Cash the Direct method reports) — to the rupee,
+ * for any netChange, not just the current demo default.
+ */
+export function indirectStatement(netChange: number): IndirectStatement {
+  const operatingTotal = Math.round(netChange * OPERATING_TOTAL_RATIO);
+  const investingTotal = Math.round(netChange * INVESTING_TOTAL_RATIO);
+  const financingTotal = netChange - operatingTotal - investingTotal; // exact top-level plug
+
+  return {
+    operating: buildSection("Operating Activities", OPERATING_RATIOS, netChange, operatingTotal),
+    investing: buildSection("Investing Activities", INVESTING_RATIOS, netChange, investingTotal),
+    financing: buildSection("Financing Activities", FINANCING_RATIOS, netChange, financingTotal),
+    netChange,
+  };
+}
+
 // ── Filtering ─────────────────────────────────────────────────────────────────
 
 export function applyFilters(txns: CashFlowTxn[], f: CashFlowFilters): CashFlowTxn[] {
