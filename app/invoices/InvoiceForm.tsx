@@ -5,6 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, isConfigured } from "@/lib/supabase";
 import type { Customer, GLAccount, Invoice, InvoiceItem } from "@/lib/types";
+import { InvoiceDeductionDialog } from "@/components/InvoiceDeductionDialog";
+import {
+  getInvoiceDeductions,
+  setInvoiceDeductions,
+  invoiceDeductionTotal,
+  isPostable,
+  type InvoiceDeduction,
+} from "@/lib/invoiceExtras";
 import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { FormField, inputClass } from "@/components/FormField";
@@ -69,6 +77,8 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
   const [gstPct, setGstPct] = useState("18");
   const [notes, setNotes] = useState("");
   const [lines, setLines] = useState<Line[]>([newLine()]);
+  const [deductions, setDeductions] = useState<InvoiceDeduction[]>([]);
+  const [showDeductions, setShowDeductions] = useState(false);
 
   const selectedCustomer = customers.find((c) => c.id === customerId) ?? null;
 
@@ -102,6 +112,7 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
   // Load the existing invoice + its line items when editing.
   useEffect(() => {
     if (mode !== "edit" || !invoiceId || !supabase) return;
+    setDeductions(getInvoiceDeductions(invoiceId));
     (async () => {
       const [{ data: inv, error: invErr }, { data: items, error: itemsErr }] = await Promise.all([
         supabase.from("invoices").select("*").eq("id", invoiceId).single(),
@@ -153,6 +164,10 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
     () => invoiceGlImpact(glAccounts, { subtotal: totals.subtotal, gst: totals.gst }),
     [glAccounts, totals]
   );
+
+  // Only complete rows count towards the displayed figures.
+  const postableDeductions = useMemo(() => deductions.filter(isPostable), [deductions]);
+  const deductionNet = invoiceDeductionTotal(postableDeductions);
 
   function updateLine(key: number, patch: Partial<Line>) {
     setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
@@ -228,6 +243,10 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
       router.push(`/invoices/${savedId}`);
       return;
     }
+
+    // Deductions live alongside the invoice (see lib/invoiceExtras). Half-filled
+    // rows are dropped rather than saved as postings against no account.
+    setInvoiceDeductions(savedId, deductions.filter(isPostable));
 
     router.push(`/invoices/${savedId}`);
   }
@@ -497,6 +516,38 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
               <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">Total</span>
               <span className="text-xl font-bold tabular-nums text-slate-900 dark:text-white">{fmtMoney(totals.total)}</span>
             </div>
+
+            {/* Deductions post to their own GL accounts; the invoice total itself is
+                unchanged, so both figures are shown rather than silently merged. */}
+            <div className="my-3 border-t border-slate-200 dark:border-slate-800" />
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeductions(true)}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-brand hover:text-brand dark:border-slate-700 dark:text-slate-300"
+              >
+                {postableDeductions.length > 0
+                  ? `Deductions (${postableDeductions.length})`
+                  : "+ Add deductions"}
+              </button>
+              {postableDeductions.length > 0 && (
+                <span
+                  className={`text-sm font-semibold tabular-nums ${
+                    deductionNet < 0 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
+                  }`}
+                >
+                  {fmtMoney(deductionNet)}
+                </span>
+              )}
+            </div>
+            {postableDeductions.length > 0 && (
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Net after deductions</span>
+                <span className="text-sm font-bold tabular-nums text-slate-900 dark:text-white">
+                  {fmtMoney(totals.total + deductionNet)}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-3">
@@ -520,6 +571,14 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
       <div className="mt-6">
         <GlImpactReview lines={glImpact} />
       </div>
+
+      <InvoiceDeductionDialog
+        open={showDeductions}
+        glAccounts={glAccounts}
+        deductions={deductions}
+        onChange={setDeductions}
+        onClose={() => setShowDeductions(false)}
+      />
     </>
   );
 }
