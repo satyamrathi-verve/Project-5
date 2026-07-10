@@ -1165,7 +1165,7 @@ export default function InvoicePrintPage() {
             </div>
           </div>
         ) : (
-          <div className="mb-6 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <div className="mb-6 max-h-[65vh] overflow-auto rounded-xl border border-slate-200 bg-white">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-[5]">
                 <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
