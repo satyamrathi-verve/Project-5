@@ -71,6 +71,10 @@ export default function ReceiptEntryPage() {
   const [openFilter, setOpenFilter] = useState<SortKey | null>(null);
   const openThRef = useRef<HTMLTableCellElement | null>(null);
 
+  const [selected, setSelected] = useState<string[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   async function loadAll() {
     if (!supabase) return;
     setLoading(true);
@@ -158,6 +162,58 @@ export default function ReceiptEntryPage() {
   const unallocated = availableToAllocate - allocTotal;
 
   if (!supabase) return <NotConfigured />;
+
+  /*
+    Deleting a receipt cascades its receipt_allocations away (see seed.sql), which
+    silently un-pays the invoices it settled. So after the delete we recompute the
+    status of every invoice it touched from the allocations that remain — otherwise
+    an invoice would still read "paid" with nothing paying for it.
+  */
+  async function performDelete(ids: string[]) {
+    if (!supabase || ids.length === 0) return;
+    setDeleting(true);
+    setError(null);
+
+    const affected = [...new Set(allocations.filter((a) => ids.includes(a.receipt_id)).map((a) => a.invoice_id))];
+
+    const { error: delErr } = await supabase.from("receipts").delete().in("id", ids);
+    if (delErr) {
+      setDeleting(false);
+      setConfirmDelete(null);
+      setError(delErr.message);
+      return;
+    }
+
+    if (affected.length > 0) {
+      const { data: remaining } = await supabase
+        .from("receipt_allocations")
+        .select("invoice_id, amount")
+        .in("invoice_id", affected);
+
+      const paidByInvoice = new Map<string, number>();
+      for (const a of remaining ?? []) {
+        paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
+      }
+      const t = today();
+      for (const invoiceId of affected) {
+        const inv = invoices.find((i) => i.id === invoiceId);
+        if (!inv) continue;
+        const paid = paidByInvoice.get(invoiceId) ?? 0;
+        const status =
+          paid >= inv.total - 0.005 ? "paid" : paid > 0.005 ? "partial" : inv.due_date < t ? "overdue" : "open";
+        await supabase.from("invoices").update({ status }).eq("id", invoiceId);
+      }
+    }
+
+    setDeleting(false);
+    setConfirmDelete(null);
+    setSelected((s) => s.filter((id) => !ids.includes(id)));
+    setSuccess(
+      `Deleted ${ids.length} receipt${ids.length > 1 ? "s" : ""}.` +
+        (affected.length ? ` ${affected.length} invoice${affected.length > 1 ? "s" : ""} re-opened.` : ""),
+    );
+    loadAll();
+  }
 
   function openForm() {
     setReceiptNo(nextReceiptNo(receipts));
@@ -311,6 +367,20 @@ export default function ReceiptEntryPage() {
       render: (r) => <span className="text-xs font-semibold tracking-wide">{r.mode}</span>,
     },
     { key: "reference", header: "Reference" },
+    {
+      key: "actions",
+      header: "Actions",
+      sortable: false,
+      className: "w-24 text-right",
+      render: (r) => (
+        <button
+          onClick={() => setConfirmDelete({ ids: [r.id], label: `receipt ${r.receipt_no}` })}
+          className="rounded-lg px-2.5 py-1 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30"
+        >
+          Delete
+        </button>
+      ),
+    },
   ];
 
   return (
@@ -605,6 +675,37 @@ export default function ReceiptEntryPage() {
         </div>
       )}
 
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
+            onClick={() => setConfirmDelete(null)}
+          />
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl bg-white p-6 shadow-drawer animate-scale-in dark:bg-slate-900">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete {confirmDelete.label}?</h3>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              Any invoice this money was knocked off will be re-opened and its status recalculated. This cannot be
+              undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => performDelete(confirmDelete.ids)}
+                disabled={deleting}
+                className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <DeductionDialog
         open={showDeductions}
         glAccounts={glAccounts}
@@ -618,7 +719,35 @@ export default function ReceiptEntryPage() {
           Loading receipts…
         </div>
       ) : (
-        <DataTable columns={columns} rows={receipts} empty="No receipts yet — record the first one." />
+        <>
+          {selected.length > 0 && (
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-brand/30 bg-brand/5 px-4 py-3">
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-200">{selected.length} selected</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setSelected([])}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={() => setConfirmDelete({ ids: selected, label: `${selected.length} receipts` })}
+                  className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700"
+                >
+                  Delete selected
+                </button>
+              </div>
+            </div>
+          )}
+          <DataTable
+            columns={columns}
+            rows={receipts}
+            selectable
+            selectedIds={selected}
+            onSelectionChange={setSelected}
+            empty="No receipts yet — record the first one."
+          />
+        </>
       )}
     </div>
   );

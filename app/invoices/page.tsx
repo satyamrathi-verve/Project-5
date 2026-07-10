@@ -72,20 +72,27 @@ export default function InvoicesPage() {
   const [columnFiltersActive, setColumnFiltersActive] = useState(false);
   const tableRef = useRef<DataTableHandle>(null);
 
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; label: string } | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  /* { ids, label } while a delete is awaiting confirmation — one row or many. */
+  const [confirmDelete, setConfirmDelete] = useState<{ ids: string[]; label: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  async function performDelete(id: string) {
-    if (!supabase) return;
+  /*
+    invoice_items and receipt_allocations both cascade on delete (see seed.sql),
+    so removing the invoice row is enough — the database cleans up after it.
+  */
+  async function performDelete(ids: string[]) {
+    if (!supabase || ids.length === 0) return;
     setDeleting(true);
-    const { error: delErr } = await supabase.from("invoices").delete().eq("id", id);
+    const { error: delErr } = await supabase.from("invoices").delete().in("id", ids);
     setDeleting(false);
+    setConfirmDelete(null);
     if (delErr) {
       setError(delErr.message);
       return;
     }
-    setConfirmDelete(null);
-    load();
+    setSelected((s) => s.filter((id) => !ids.includes(id)));
+    await load();
   }
 
   async function load() {
@@ -317,7 +324,7 @@ export default function InvoicesPage() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              setConfirmDelete({ id: r.id, label: r.invoice_no });
+              setConfirmDelete({ ids: [r.id], label: `invoice ${r.invoice_no}` });
             }}
             title="Delete"
             className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-900/30"
@@ -427,10 +434,35 @@ export default function InvoicesPage() {
               </button>
             </div>
           ) : (
+            <>
+            {selected.length > 0 && (
+              <div className="mb-4 flex items-center justify-between rounded-xl border border-brand/30 bg-brand/5 px-4 py-3">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  {selected.length} selected
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelected([])}
+                    className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete({ ids: selected, label: `${selected.length} invoices` })}
+                    className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700"
+                  >
+                    Delete selected
+                  </button>
+                </div>
+              </div>
+            )}
             <DataTable
               ref={tableRef}
               columns={columns}
               rows={filtered}
+              selectable
+              selectedIds={selected}
+              onSelectionChange={setSelected}
               empty={
                 rows.length === 0
                   ? "No invoices in the database yet."
@@ -439,31 +471,35 @@ export default function InvoicesPage() {
               rowClassName={(r) => (r.effectiveStatus === "overdue" ? "bg-red-50 dark:bg-red-950/40" : "")}
               onActiveFiltersChange={setColumnFiltersActive}
             />
+            </>
           )}
         </>
       )}
 
       {confirmDelete && (
-        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
-            <h3 className="mb-2 text-lg font-bold text-slate-900 dark:text-slate-100">Delete invoice?</h3>
-            <p className="mb-5 text-sm text-slate-600 dark:text-slate-300">
-              You&apos;re about to permanently delete{" "}
-              <span className="font-semibold text-slate-900 dark:text-slate-100">{confirmDelete.label}</span>. This
-              can&apos;t be undone.
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in"
+            onClick={() => setConfirmDelete(null)}
+          />
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl bg-white p-6 shadow-drawer animate-scale-in dark:bg-slate-900">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete {confirmDelete.label}?</h3>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              This also removes the line items and any receipt allocations against{" "}
+              {confirmDelete.ids.length > 1 ? "them" : "it"}. Receipts themselves are kept. This cannot be undone.
             </p>
-            <div className="flex justify-end gap-3">
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setConfirmDelete(null)}
                 disabled={deleting}
-                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
               >
                 Cancel
               </button>
               <button
-                onClick={() => performDelete(confirmDelete.id)}
+                onClick={() => performDelete(confirmDelete.ids)}
                 disabled={deleting}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
               >
                 {deleting ? "Deleting…" : "Delete"}
               </button>
