@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Icon, type IconName } from "./icons";
+import { VerveLogo } from "./VerveLogo";
 import { getSession, signOut, onAuthChange } from "@/lib/auth";
 import { hasPermission, useCurrentAccess, type ModuleKey, type Permissions } from "@/lib/users";
 
@@ -229,16 +230,19 @@ export function Sidebar({
           collapsed ? "w-[76px]" : "w-64"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
-        {/* Brand — VERVE / AR Manager only */}
+        {/* Brand — the Verve Advisory wordmark above the product name. The logo is
+            navy on white, so on this dark rail it sits on a white chip. */}
         <div className="flex items-center border-b border-white/10 px-5 py-5">
           {collapsed ? (
-            <div className="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-brand-light to-brand text-base font-bold text-white shadow-inner">
-              V
+            <div className="grid h-9 w-9 place-items-center rounded-lg bg-white shadow-inner" title="Verve Advisory">
+              <span className="text-base font-black text-[#2b4c9c]">V</span>
             </div>
           ) : (
             <div className="leading-tight">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-brand-light">Verve</p>
-              <h1 className="text-lg font-bold text-white">AR Manager</h1>
+              <span className="inline-flex rounded-lg bg-white px-2.5 py-1.5 shadow-sm">
+                <VerveLogo onLight className="text-[10px]" />
+              </span>
+              <h1 className="mt-2.5 text-lg font-bold text-white">AR Manager</h1>
             </div>
           )}
         </div>

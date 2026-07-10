@@ -12,9 +12,13 @@
 export function VerveLogo({
   className = "",
   subtitle = true,
+  onLight = false,
 }: {
   className?: string;
   subtitle?: boolean;
+  /** Set when the logo sits on a permanently white surface (e.g. a chip on the
+   *  dark sidebar). Keeps "Advisory" dark instead of following the app theme. */
+  onLight?: boolean;
 }) {
   return (
     <span className={`inline-block leading-none ${className}`} aria-label="Verve Advisory">
@@ -26,7 +30,9 @@ export function VerveLogo({
       </span>
       {subtitle && (
         <span
-          className="block text-right font-bold tracking-[0.03em] text-slate-800 dark:text-slate-200"
+          className={`block text-right font-bold tracking-[0.03em] ${
+            onLight ? "text-slate-800" : "text-slate-800 dark:text-slate-200"
+          }`}
           style={{ fontSize: "0.95em", marginTop: "-0.12em" }}
         >
           Advisory

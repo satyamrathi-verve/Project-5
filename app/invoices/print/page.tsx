@@ -399,7 +399,7 @@ function InvoiceDocument({
       <div className="flex items-start justify-between gap-6 bg-gradient-to-r from-brand-dark via-brand to-brand-light px-10 py-7 text-white print:px-[16mm] print:py-[12mm]">
         <div>
           <span className="inline-flex rounded-lg bg-white px-3 py-2 shadow-sm">
-            <VerveLogo className="text-[15px]" />
+            <VerveLogo onLight className="text-[15px]" />
           </span>
           <h1 className="mt-3 text-lg font-bold">{company?.name ?? "Company"}</h1>
           {company?.address && (
