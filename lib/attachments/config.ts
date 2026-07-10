@@ -15,6 +15,7 @@ export const MODULES: Record<string, { label: string }> = {
   customers: { label: "Customers" },
   vendors: { label: "Vendors" },
   salesinvoices: { label: "Sales Invoices" },
+  receipts: { label: "Receipts" },
   vendorbills: { label: "Vendor Bills" },
   journalentries: { label: "Journal Entries" },
   bankaccounts: { label: "Bank Accounts" },

@@ -12,6 +12,7 @@ import { NotConfigured } from "@/components/NotConfigured";
 import { formatMoney } from "@/lib/balances";
 import { Icon } from "@/components/icons";
 import { Popover } from "@/components/overlay";
+import { AttachmentManager } from "@/components/AttachmentManager";
 import { type Deduction, setReceiptExtras, getReceiptExtras, deductionTotal } from "@/lib/receiptExtras";
 
 /*
@@ -263,6 +264,29 @@ export default function ReceiptEntryPage() {
     setSuccess(null);
     setError(null);
     setOpen(true);
+  }
+
+  /*
+    Which invoices actually change if these receipts are deleted. An invoice that
+    another receipt still settles in full is NOT listed — only the ones that stop
+    being covered, with how much would come unapplied.
+  */
+  function invoicesReopenedBy(receiptIds: string[]) {
+    const affected = [
+      ...new Set(allocations.filter((a) => receiptIds.includes(a.receipt_id)).map((a) => a.invoice_id)),
+    ];
+    return affected.flatMap((invoiceId) => {
+      const inv = invoices.find((i) => i.id === invoiceId);
+      if (!inv) return [];
+      const removed = allocations
+        .filter((a) => receiptIds.includes(a.receipt_id) && a.invoice_id === invoiceId)
+        .reduce((s, a) => s + Number(a.amount), 0);
+      const remaining = allocations
+        .filter((a) => !receiptIds.includes(a.receipt_id) && a.invoice_id === invoiceId)
+        .reduce((s, a) => s + Number(a.amount), 0);
+      if (remaining >= inv.total - 0.005) return []; // still fully paid by someone else
+      return [{ invoiceId, invoiceNo: inv.invoice_no, amount: removed }];
+    });
   }
 
   /** Leave the form without saving. Clears edit mode so the list and the
@@ -584,6 +608,28 @@ export default function ReceiptEntryPage() {
             </FormField>
           </div>
 
+          {/*
+            Attachments hang off the receipt NUMBER rather than its database id, so
+            a cheque can be attached while the receipt is still being punched (the
+            id doesn't exist until save). Same approach as GL Master, which keys on
+            account code.
+          */}
+          {receiptNo.trim() && (
+            <div className="mt-6">
+              <div className="mb-2 flex items-center gap-2">
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Attachments
+                </h4>
+                {mode === "cheque" && (
+                  <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[11px] font-medium text-brand">
+                    Attach a scan of the cheque
+                  </span>
+                )}
+              </div>
+              <AttachmentManager module="receipts" recordId={receiptNo.trim()} />
+            </div>
+          )}
+
           {/* Allocation table — the "knock-off" */}
           {customerId && (
             <div className="mt-6">
@@ -806,9 +852,32 @@ export default function ReceiptEntryPage() {
           <div className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl bg-white p-6 shadow-drawer animate-scale-in dark:bg-slate-900">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete {confirmDelete.label}?</h3>
             <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-              Any invoice this money was knocked off will be re-opened and its status recalculated. This cannot be
-              undone.
+              {invoicesReopenedBy(confirmDelete.ids).length > 0 ? (
+                <>
+                  This will re-open{" "}
+                  {invoicesReopenedBy(confirmDelete.ids).length === 1 ? "this invoice" : "these invoices"} and
+                  recalculate {invoicesReopenedBy(confirmDelete.ids).length === 1 ? "its" : "their"} status. This
+                  cannot be undone.
+                </>
+              ) : (
+                <>
+                  This receipt isn&apos;t applied to any invoice, so nothing will re-open. This cannot be undone.
+                </>
+              )}
             </p>
+
+            {invoicesReopenedBy(confirmDelete.ids).length > 0 && (
+              <ul className="mt-3 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+                {invoicesReopenedBy(confirmDelete.ids).map((r) => (
+                  <li key={r.invoiceId} className="flex justify-between gap-3 text-sm">
+                    <span className="font-medium text-amber-900 dark:text-amber-200">{r.invoiceNo}</span>
+                    <span className="tabular-nums text-amber-700 dark:text-amber-300">
+                      {formatMoney(r.amount)} unapplied
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 onClick={() => setConfirmDelete(null)}
@@ -999,6 +1068,13 @@ function ReceiptView({
               <span className="tabular-nums">{formatMoney(unallocated)}</span>
             </div>
           )}
+        </div>
+
+        <h4 className="mt-6 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Attachments
+        </h4>
+        <div className="mt-2">
+          <AttachmentManager module="receipts" recordId={receipt.receipt_no} readOnly />
         </div>
 
         <div className="mt-5 flex justify-end gap-2">
