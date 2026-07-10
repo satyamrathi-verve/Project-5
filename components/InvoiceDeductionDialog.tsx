@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { GLAccount } from "@/lib/types";
 import { inputClass } from "@/components/FormField";
 import { Icon } from "@/components/icons";
@@ -29,14 +29,31 @@ export function InvoiceDeductionDialog({
   onChange: (next: InvoiceDeduction[]) => void;
   onClose: () => void;
 }) {
+  /*
+    Rows are edited live through onChange, so Cancel has to put back what was
+    there when the dialog opened — otherwise "Cancel" would silently keep the
+    edits, which is worse than having no Cancel at all.
+  */
+  const snapshot = useRef<InvoiceDeduction[]>([]);
+  useEffect(() => {
+    if (open) snapshot.current = deductions;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  function cancel() {
+    onChange(snapshot.current);
+    onClose();
+  }
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") cancel();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   if (!open) return null;
 
@@ -58,9 +75,12 @@ export function InvoiceDeductionDialog({
 
   return createPortal(
     <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-drawer dark:bg-slate-900">
+      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm animate-fade-in" onClick={cancel} />
+      <div className="relative z-10 w-full max-w-3xl overflow-hidden rounded-2xl bg-white shadow-drawer animate-scale-in dark:bg-slate-900">
         <div className="p-6">
+          <div className="mb-3 grid h-11 w-11 place-items-center rounded-full bg-brand/10 text-brand dark:bg-brand/15 dark:text-brand-light">
+            <Icon name="receipt" size={20} />
+          </div>
           <h3 className="text-base font-bold text-slate-900 dark:text-white">Deductions</h3>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Post an adjustment against a GL account. A <strong>negative</strong> amount reduces what the customer owes
@@ -178,12 +198,20 @@ export function InvoiceDeductionDialog({
             </p>
           )}
 
-          <div className="mt-5 flex justify-end gap-3">
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={cancel}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              Cancel
+            </button>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-dark"
             >
+              <Icon name="check" size={15} />
               Done
             </button>
           </div>
