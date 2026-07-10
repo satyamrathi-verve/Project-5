@@ -182,10 +182,16 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
   async function save() {
     if (!supabase) return;
     const filledLines = lines.filter((l) => l.description.trim() && lineAmount(l) > 0);
-    if (!customerId) return setError("Please pick a customer.");
     if (!invoiceNo.trim()) return setError("Please enter an invoice number.");
+    if (!invoiceDate) return setError("Please enter an invoice date.");
+    if (!customerId) return setError("Please pick a customer.");
+    if (!dueDate) return setError("Please enter a due date.");
     if (filledLines.length === 0)
       return setError("Add at least one line item with a description and an amount.");
+    // A zero-value invoice is never intentional — a negative GST rate or a line
+    // that cancels out can produce one even when the lines above look filled in.
+    if (totals.total <= 0)
+      return setError("The invoice total is zero. Check the line amounts and the GST rate before saving.");
 
     setSaving(true);
     setError(null);
@@ -302,7 +308,7 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
           {/* Header */}
           <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormField label="Customer">
+              <FormField label="Customer *">
                 <select
                   className={inputClass}
                   value={customerId}
@@ -316,7 +322,7 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
                   ))}
                 </select>
               </FormField>
-              <FormField label="Invoice No">
+              <FormField label="Invoice No *">
                 <input
                   className={inputClass}
                   value={invoiceNo}
@@ -324,7 +330,7 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
                   placeholder="INV-0001"
                 />
               </FormField>
-              <FormField label="Invoice Date">
+              <FormField label="Invoice Date *">
                 <input
                   type="date"
                   className={inputClass}
@@ -332,7 +338,7 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
                   onChange={(e) => setInvoiceDate(e.target.value)}
                 />
               </FormField>
-              <FormField label="Due Date">
+              <FormField label="Due Date *">
                 <input
                   type="date"
                   className={inputClass}
