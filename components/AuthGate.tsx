@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { SignIn } from "@/components/SignIn";
 import {
@@ -35,12 +35,25 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [idleNotice, setIdleNotice] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
   const { ready: accessReady, user } = useCurrentAccess();
 
+  /*
+    Whether a session existed on the previous sync. `null` means "first read" —
+    without that distinction, simply loading any page while already signed in
+    would look like a fresh sign-in and bounce the user to the Dashboard.
+  */
+  const hadSession = useRef<boolean | null>(null);
+
   const sync = useCallback(() => {
-    setSession(getSession());
+    const next = getSession();
+    // A real sign-in: we had no session a moment ago, and now we do.
+    if (hadSession.current === false && next) router.replace("/dashboard");
+    hadSession.current = next != null;
+
+    setSession(next);
     if (consumeIdleSignOut()) setIdleNotice(true);
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     sync();
