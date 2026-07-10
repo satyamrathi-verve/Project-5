@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { NotConfigured } from "@/components/NotConfigured";
 import { DataTable, type Column, type DataTableHandle } from "@/components/DataTable";
 import { StatusBadge } from "@/components/StatusBadge";
+import { Icon } from "@/components/icons";
 
 /*
   Sales Invoice — List. Every invoice in one table with a status filter, summary
@@ -70,6 +71,22 @@ export default function InvoicesPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [columnFiltersActive, setColumnFiltersActive] = useState(false);
   const tableRef = useRef<DataTableHandle>(null);
+
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function performDelete(id: string) {
+    if (!supabase) return;
+    setDeleting(true);
+    const { error: delErr } = await supabase.from("invoices").delete().eq("id", id);
+    setDeleting(false);
+    if (delErr) {
+      setError(delErr.message);
+      return;
+    }
+    setConfirmDelete(null);
+    load();
+  }
 
   async function load() {
     if (!supabase) return;
@@ -274,6 +291,42 @@ export default function InvoicesPage() {
       value: (r) => r.effectiveStatus,
       render: (r) => <StatusBadge status={r.effectiveStatus} />,
     },
+    {
+      key: "actions",
+      header: "Actions",
+      sortable: false,
+      className: "w-28",
+      render: (r) => (
+        <div className="flex items-center gap-1">
+          <Link
+            href={`/invoices/${r.id}`}
+            onClick={(e) => e.stopPropagation()}
+            title="View"
+            className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Icon name="eye" size={16} />
+          </Link>
+          <Link
+            href={`/invoices/${r.id}/edit`}
+            onClick={(e) => e.stopPropagation()}
+            title="Edit"
+            className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-brand dark:text-slate-400 dark:hover:bg-slate-800"
+          >
+            <Icon name="pencil" size={16} />
+          </Link>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setConfirmDelete({ id: r.id, label: r.invoice_no });
+            }}
+            title="Delete"
+            className="rounded p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:text-slate-400 dark:hover:bg-red-900/30"
+          >
+            <Icon name="trash" size={16} />
+          </button>
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -388,6 +441,35 @@ export default function InvoicesPage() {
             />
           )}
         </>
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-slate-900">
+            <h3 className="mb-2 text-lg font-bold text-slate-900 dark:text-slate-100">Delete invoice?</h3>
+            <p className="mb-5 text-sm text-slate-600 dark:text-slate-300">
+              You&apos;re about to permanently delete{" "}
+              <span className="font-semibold text-slate-900 dark:text-slate-100">{confirmDelete.label}</span>. This
+              can&apos;t be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                disabled={deleting}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => performDelete(confirmDelete.id)}
+                disabled={deleting}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

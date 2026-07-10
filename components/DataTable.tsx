@@ -229,7 +229,9 @@ function DataTableInner<T extends { id: string }>(
                           s?.key === c.key ? { key: c.key, dir: s.dir === 1 ? -1 : 1 } : { key: c.key, dir: 1 },
                         )
                       }
-                      className="inline-flex items-center gap-1 font-semibold text-slate-600 hover:text-brand dark:text-slate-300"
+                      className={`inline-flex items-center gap-1 hover:text-brand dark:text-slate-300 ${
+                        selected ? "font-bold text-brand dark:text-brand" : "font-semibold text-slate-600"
+                      }`}
                       title="Click to sort"
                     >
                       {c.header}
@@ -247,7 +249,7 @@ function DataTableInner<T extends { id: string }>(
                       }`}
                       title={`Filter ${c.header}`}
                     >
-                      <Icon name="filter" size={13} />
+                      <Icon name="filter" size={18} />
                     </button>
                   </span>
 
