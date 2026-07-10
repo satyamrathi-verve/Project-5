@@ -559,11 +559,17 @@ export function InvoiceForm({ mode, invoiceId }: { mode: "create" | "edit"; invo
           <div className="flex flex-col gap-3">
             <button
               onClick={save}
-              disabled={saving}
-              className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-50"
+              disabled={saving || totals.total <= 0}
+              title={totals.total <= 0 ? "Add a line item — an invoice can't total zero." : undefined}
+              className="rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? "Saving…" : mode === "create" ? "Save invoice" : "Save changes"}
             </button>
+            {totals.total <= 0 && (
+              <p className="-mt-1 text-center text-xs text-slate-400">
+                Add a line item with an amount — an invoice can&apos;t total zero.
+              </p>
+            )}
             <Link
               href="/invoices"
               className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-center text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
