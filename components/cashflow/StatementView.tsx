@@ -65,7 +65,9 @@ export function StatementView({
   }, [bankAccounts, transactions]);
 
   const netChange = categories.reduce((s, r) => s + r.net, 0);
-  const indirect = useMemo(() => indirectStatement(netChange), [netChange]);
+  // Derived from the SAME transactions the Direct method reads (not a second
+  // dataset) — so it always reconciles to `netChange` exactly, automatically.
+  const indirect = useMemo(() => indirectStatement(transactions), [transactions]);
 
   const doPrint = () => {
     const rows =

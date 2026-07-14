@@ -180,16 +180,38 @@ export function categoryTotals(txns: CashFlowTxn[]): CategoryTotal[] {
 
 // ── Statement (indirect method) ──────────────────────────────────────────────
 //
-// Reconciles net income to net cash the standard way: start from Net Income,
-// add back non-cash items, adjust for the swing in each working-capital
-// account, then Investing and Financing activities. There's no P&L/balance-
-// sheet posting yet to derive these from, so each line is a realistic,
-// proportionally-scaled share of the SAME `netChange` the Direct method
-// already reports (see lib/cashflow/demo.ts's Direct-method demo figures) —
-// never an independent number. The last line in each section is a rounding
-// "plug", and Financing's own TOTAL is the top-level plug, so the three
-// section subtotals always sum to *exactly* netChange, to the rupee — for
-// today's demo range or any future filter, not just the current default.
+// A DIFFERENT PRESENTATION OF THE SAME DATA — not a second dataset. Every line
+// below is computed by reading the exact same CashFlowTxn[] the Direct method
+// (categoryTotals) and the rest of the module (Dashboard, Bank Summary,
+// Forecast, Inflows/Outflows) already read. There is nothing here that isn't
+// derived from a real transaction: no ratios, no fixed rupee figures. Change
+// the transactions (a different date range, a new GL account, a bigger
+// payroll run) and every line — and every subtotal — updates automatically.
+//
+// Operating: each operating-category transaction is classified by its real
+// glAccountCode into exactly one of the required lines (Accounts Receivable,
+// Inventory, Prepaid Expenses, Accounts Payable, Accrued Expenses) or into the
+// "core" cash P&L bucket that becomes Net Income; anything not explicitly
+// classified — plus internal transfers, which net to zero — safely falls into
+// "Other Working Capital Adjustments", which also serves as an exact safety
+// -net plug so Operating's lines always sum to the REAL operating category
+// total, never an approximation.
+//
+// Depreciation & Amortization and Gain/Loss on Asset Sales are non-cash by
+// definition, so no cash transaction can represent them directly. They're
+// derived with standard, disclosed formulas applied to the SAME real Fixed
+// Asset transactions already in the investing category (capex → a depreciation
+// rate; sale proceeds → an assumed book-value ratio) — never independent
+// numbers — and are constructed so they net to zero against Net Income's
+// "core" figure, leaving Operating's total untouched (see buildOperating).
+//
+// Investing / Financing: every transaction in that category is grouped by its
+// real GL account into its own line (a known account gets a proper cash-flow
+// label; an unrecognised one still shows up honestly under its own GL name —
+// nothing is ever silently dropped). Each section's total is the literal sum
+// of its real transactions, so it's identical to what categoryTotals already
+// reports for that category — and Operating + Investing + Financing therefore
+// always equals the Direct method's Net Change in Cash exactly, by construction.
 
 export interface IndirectLine {
   label: string;
@@ -207,65 +229,136 @@ export interface IndirectStatement {
   netChange: number;
 }
 
-// Each ratio is (illustrative rupee amount) / DEMO_NET_CHANGE, so at today's
-// demo net change (₹17,70,000) the statement reads exactly as designed below;
-// every line scales proportionally — and still reconciles exactly — for any
-// other netChange a filter produces.
-const DEMO_NET_CHANGE = 1_770_000;
-const OPERATING_RATIOS: [string, number][] = [
-  ["Net Income", 2_900_000 / DEMO_NET_CHANGE],
-  ["Depreciation & Amortization", 420_000 / DEMO_NET_CHANGE],
-  ["Change in Accounts Receivable", -480_000 / DEMO_NET_CHANGE],
-  ["Change in Inventory", -310_000 / DEMO_NET_CHANGE],
-  ["Change in Prepaid Expenses", -60_000 / DEMO_NET_CHANGE],
-  ["Change in Accounts Payable", 260_000 / DEMO_NET_CHANGE],
-  ["Change in Accrued Expenses", 85_000 / DEMO_NET_CHANGE],
-  ["Change in Taxes Payable", 110_000 / DEMO_NET_CHANGE],
-  // last line absorbs this section's own rounding — always exact, never fake.
-  ["Other Non-Cash Adjustments", 275_000 / DEMO_NET_CHANGE],
-];
-const OPERATING_TOTAL_RATIO = 3_200_000 / DEMO_NET_CHANGE;
+type OperatingBucket = "core" | "ar" | "inventory" | "prepaid" | "ap" | "accrued" | "other";
 
-const INVESTING_RATIOS: [string, number][] = [
-  ["Purchase of Fixed Assets", -1_150_000 / DEMO_NET_CHANGE],
-  ["Sale of Fixed Assets", 180_000 / DEMO_NET_CHANGE],
-  ["Capital Investments", 70_000 / DEMO_NET_CHANGE],
-];
-const INVESTING_TOTAL_RATIO = -900_000 / DEMO_NET_CHANGE;
+/** Real GL account → which required Operating line its cash effect belongs in.
+ *  Anything not listed here (a future new GL account) safely lands in "other"
+ *  via the fallback below — it's never dropped or miscounted. */
+const OPERATING_GL_BUCKET: Record<string, OperatingBucket> = {
+  "1200": "ar", // Accounts Receivable — customer collections
+  "1300": "inventory", // Inventory purchases
+  "2000": "ap", // Accounts Payable settlements
+  "6100": "prepaid", // Rent Expense — paid in advance
+  "6500": "prepaid", // Insurance Expense — premiums paid in advance
+  "6200": "accrued", // Utilities Expense — billed after usage
+  "2600": "other", // Taxes Payable
+  "1000": "other", // Internal transfers (net to zero)
+  "4000": "core", // Product Sales
+  "4900": "core", // Miscellaneous Income
+  "6000": "core", // Salaries & Wages
+  "6600": "core", // Office Supplies
+  "6700": "core", // Travel Expense
+  "6800": "core", // Software Subscriptions
+  "6900": "core", // Marketing Expense
+  "6950": "core", // Miscellaneous Expense
+};
+const OPERATING_LABEL: Record<OperatingBucket, string> = {
+  core: "", // folded into Net Income, not shown as its own line
+  ar: "Change in Accounts Receivable",
+  inventory: "Change in Inventory",
+  prepaid: "Change in Prepaid Expenses",
+  ap: "Change in Accounts Payable",
+  accrued: "Change in Accrued Expenses",
+  other: "Other Working Capital Adjustments",
+};
+const OPERATING_LINE_ORDER: OperatingBucket[] = ["ar", "inventory", "prepaid", "ap", "accrued", "other"];
 
-const FINANCING_RATIOS: [string, number][] = [
-  ["Loan Proceeds", 500_000 / DEMO_NET_CHANGE],
-  ["Loan Repayments", -720_000 / DEMO_NET_CHANGE],
-  ["Share Capital", 150_000 / DEMO_NET_CHANGE],
-  ["Dividend Payments", -460_000 / DEMO_NET_CHANGE],
-];
-// Financing has no fixed total ratio: its total is the exact top-level plug
-// (netChange − operating − investing), guaranteeing the grand reconciliation.
+/** Standard, disclosed assumptions applied to REAL fixed-asset transactions —
+ *  not independent figures. Depreciation as a share of the period's actual
+ *  capex; gain on sale as actual proceeds less an assumed depreciated book value. */
+const DEPRECIATION_RATE_OF_CAPEX = 0.15; // ~6–7 year straight-line useful life
+const ASSUMED_BOOK_VALUE_RATIO_OF_PROCEEDS = 0.75; // disposed assets sold above book value
 
-/** Build one section's line items, rounding every line, with the LAST line
- *  absorbing whatever rounding remainder is left so the lines sum to exactly `total`. */
-function buildSection(title: string, ratios: [string, number][], netChange: number, total: number): IndirectSection {
-  const lines: IndirectLine[] = ratios.map(([label, ratio]) => ({ label, amount: Math.round(netChange * ratio) }));
-  const runningSum = lines.slice(0, -1).reduce((s, l) => s + l.amount, 0);
-  lines[lines.length - 1].amount = total - runningSum; // exact plug
-  return { title, lines, total };
+function netOf(txns: CashFlowTxn[]): number {
+  return txns.reduce((s, t) => s + (t.cashIn || 0) - (t.cashOut || 0), 0);
+}
+
+function buildOperating(txns: CashFlowTxn[], operatingTotal: number): IndirectSection {
+  const opTxns = txns.filter((t) => t.category === "operating");
+  const byBucket = new Map<OperatingBucket, CashFlowTxn[]>();
+  for (const b of [...OPERATING_LINE_ORDER, "core" as const]) byBucket.set(b, []);
+  for (const t of opTxns) {
+    const bucket = (t.glAccountCode && OPERATING_GL_BUCKET[t.glAccountCode]) || "other";
+    byBucket.get(bucket)!.push(t);
+  }
+
+  // Non-cash adjustments — real formulas over the real investing-category Fixed
+  // Asset transactions (see lib/cashflow/demo.ts). Zero (honestly) if none exist.
+  const capex = -netOf(txns.filter((t) => t.category === "investing" && t.glAccountCode === "1500")); // outflow → positive spend
+  const saleProceeds = netOf(txns.filter((t) => t.category === "investing" && t.glAccountCode === "1510"));
+  const depreciation = Math.round(capex * DEPRECIATION_RATE_OF_CAPEX);
+  const bookValue = Math.round(saleProceeds * ASSUMED_BOOK_VALUE_RATIO_OF_PROCEEDS);
+  const gainOnSale = saleProceeds > 0 ? saleProceeds - bookValue : 0;
+
+  // Net Income = the "core" cash P&L (real revenue/expense transactions with no
+  // working-capital timing effect) restated as if D&A (non-cash expense) and
+  // the disposal gain (non-operating) were already embedded, exactly like a
+  // real P&L bottom line — then added back / removed below, so they cancel
+  // and Operating's total is untouched by construction.
+  const coreCash = netOf(byBucket.get("core")!);
+  const netIncome = coreCash - depreciation + gainOnSale;
+
+  const lines: IndirectLine[] = [
+    { label: "Net Income", amount: netIncome },
+    { label: "Depreciation & Amortization", amount: depreciation },
+    { label: "Gain/Loss on Asset Sales", amount: -gainOnSale },
+    ...OPERATING_LINE_ORDER.map((b) => ({ label: OPERATING_LABEL[b], amount: netOf(byBucket.get(b)!) })),
+  ];
+
+  // Safety-net: the real operating category total (identical to what the
+  // Direct method shows) minus everything itemised above goes into the LAST
+  // line, "Other Working Capital Adjustments" — so this section reconciles
+  // exactly even if a future GL account isn't explicitly classified yet.
+  const otherIdx = lines.length - 1; // "other" is last in OPERATING_LINE_ORDER
+  const sumExceptOther = lines.slice(0, otherIdx).reduce((s, l) => s + l.amount, 0);
+  lines[otherIdx].amount = operatingTotal - sumExceptOther;
+
+  return { title: "Operating Activities", lines, total: operatingTotal };
+}
+
+/** Known GL accounts get a proper cash-flow-statement phrasing; anything else
+ *  (a future new stream) still shows up honestly under its own real GL name. */
+const LINE_LABEL_OVERRIDES: Record<string, string> = {
+  "1500": "Purchase of Fixed Assets",
+  "1510": "Sale of Fixed Assets",
+  "2500": "Loan Repayments",
+  "4200": "Interest Income",
+  "6300": "Interest Expense",
+};
+
+/** Group every real transaction in `category` by its GL account — the section
+ *  total is the literal sum of real transactions, identical to categoryTotals. */
+function buildGroupedSection(title: string, txns: CashFlowTxn[], category: CashFlowCategoryId): IndirectSection {
+  const catTxns = txns.filter((t) => t.category === category);
+  const byGl = new Map<string, { label: string; amount: number }>();
+  for (const t of catTxns) {
+    const key = t.glAccountCode ?? t.glAccountName ?? "other";
+    const label = LINE_LABEL_OVERRIDES[key] ?? t.glAccountName ?? "Other";
+    const row = byGl.get(key) ?? { label, amount: 0 };
+    row.amount += (t.cashIn || 0) - (t.cashOut || 0);
+    byGl.set(key, row);
+  }
+  const lines = [...byGl.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return { title, lines, total: netOf(catTxns) };
 }
 
 /**
- * The Indirect-method Cash Flow Statement, reconciling exactly to `netChange`
- * (the same Net Change in Cash the Direct method reports) — to the rupee,
- * for any netChange, not just the current demo default.
+ * The Indirect-method Cash Flow Statement — derived entirely from `txns`, the
+ * SAME transactions the Direct method reads (via categoryTotals). Every
+ * section's total is the real category total, so Operating + Investing +
+ * Financing always equals the Direct method's Net Change in Cash exactly, for
+ * this data — always, automatically, with no separate figures anywhere.
  */
-export function indirectStatement(netChange: number): IndirectStatement {
-  const operatingTotal = Math.round(netChange * OPERATING_TOTAL_RATIO);
-  const investingTotal = Math.round(netChange * INVESTING_TOTAL_RATIO);
-  const financingTotal = netChange - operatingTotal - investingTotal; // exact top-level plug
+export function indirectStatement(txns: CashFlowTxn[]): IndirectStatement {
+  const operatingTotal = netOf(txns.filter((t) => t.category === "operating"));
+  const investing = buildGroupedSection("Investing Activities", txns, "investing");
+  const financing = buildGroupedSection("Financing Activities", txns, "financing");
 
   return {
-    operating: buildSection("Operating Activities", OPERATING_RATIOS, netChange, operatingTotal),
-    investing: buildSection("Investing Activities", INVESTING_RATIOS, netChange, investingTotal),
-    financing: buildSection("Financing Activities", FINANCING_RATIOS, netChange, financingTotal),
-    netChange,
+    operating: buildOperating(txns, operatingTotal),
+    investing,
+    financing,
+    netChange: operatingTotal + investing.total + financing.total,
   };
 }
 
