@@ -179,8 +179,8 @@ function DataTableInner<T extends { id: string }>(
   const totalCols = columns.length + (selectable ? 1 : 0);
 
   return (
-    <div className="overflow-visible rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <table className="w-full min-w-[640px] text-sm">
         <thead>
           <tr className="border-b border-slate-200 bg-slate-50 text-left dark:border-slate-800 dark:bg-slate-800/50">
             {selectable && (
